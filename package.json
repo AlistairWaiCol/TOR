@@ -1,0 +1,41 @@
+{
+  "name": "one-ring-companion",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The One Ring 2e companion app - character sheets, live hex map, and journey/travel engine for the Darkening of Mirkwood campaign.",
+  "scripts": {
+    "dev": "concurrently -n server,client -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node --watch --watch-preserve-output server/index.js",
+    "dev:client": "vite",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "db:migrate": "node server/db/migrate.js",
+    "seed:map": "node scripts/seedMap.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "concurrently": "^9.1.2",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.38.4",
+    "express": "^4.21.2",
+    "multer": "^2.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.1",
+    "sharp": "^0.33.5",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.7"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "sharp": true,
+    "esbuild": true
+  }
+}

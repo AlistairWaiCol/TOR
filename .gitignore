@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+*.log
+npm-debug.log*
+
+# Local SQLite database
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# Uploaded originals and generated web derivatives.
+# The seed map is a large binary; keep it out of git.
+uploads/originals/
+uploads/derivatives/
+uploads/seed/
