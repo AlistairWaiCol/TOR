@@ -259,13 +259,18 @@ describe('map derivatives', () => {
     assert.equal(cal.originalWidth, 4200);
     assert.equal(cal.originalHeight, 2600);
     // Spec-measured grid defaults are seeded, not zeroes.
-    assert.equal(cal.hexEdge, 71);
-    assert.equal(cal.colSpacing, 106);
-    assert.equal(cal.colOffset, 62);
+    assert.equal(cal.hexEdge, 70);
+    assert.equal(cal.colSpacing, 105);
+    assert.equal(cal.colOffset, 60);
 
     assert.ok(cal.tiers.length >= 2, 'expected multiple resolution tiers');
+    // The 'full' tier is deliberately NOT downscaled (re-encode only, so zoomed-in
+    // text stays sharp) — every other tier is downscaled for zoomed-out use.
+    const full = cal.tiers.find((t) => t.name === 'full');
+    assert.ok(full, 'expected a full-resolution tier');
+    assert.equal(full.width, 4200);
     for (const t of cal.tiers) {
-      assert.ok(t.width <= 3200, `tier ${t.name} should be web-sized`);
+      if (t.name !== 'full') assert.ok(t.width <= 3200, `tier ${t.name} should be web-sized`);
       assert.ok(t.bytes < originalBytes, `tier ${t.name} should be smaller than the original`);
       assert.ok(fs.existsSync(path.join(paths.derivatives, t.file)));
     }
@@ -325,6 +330,333 @@ describe('map derivatives', () => {
     assert.equal(r.data.hex.hardTerrain, true);
     assert.equal(r.data.hex.road, true);
     assert.equal(r.data.hex.regionType, 'border');
+  });
+});
+
+describe('Compendium', () => {
+  let locationId;
+  let weaponId;
+
+  it('comes seeded with the six core Virtues and the six core Rewards', async () => {
+    const r = await player('GET', '/compendium');
+    assert.equal(r.status, 200);
+
+    const virtueNames = r.data.virtues.map((v) => v.name).sort();
+    assert.deepEqual(virtueNames, [
+      'Confidence',
+      'Dour-handed',
+      'Hardiness',
+      'Mastery',
+      'Nimbleness',
+      'Prowess',
+    ]);
+    for (const v of r.data.virtues) {
+      assert.equal(v.source, 'core');
+      assert.ok(v.effect.length > 5, `${v.name} needs effect text`);
+    }
+
+    const rewardNames = r.data.rewards.map((x) => x.name).sort();
+    assert.deepEqual(rewardNames, [
+      'Close-fitting',
+      'Cunning Make',
+      'Fell',
+      'Grievous',
+      'Keen',
+      'Reinforced',
+    ]);
+
+    // Tiers come from shared/rewards.js, enhanced tiers included.
+    const fell = r.data.rewards.find((x) => x.name === 'Fell');
+    assert.deepEqual(fell.appliesTo, ['weapon']);
+    assert.equal(fell.code, 'F');
+    assert.ok(fell.tiers.some((t) => t.value === 'enhanced_elven'));
+    assert.ok(!fell.tiers.some((t) => t.value === 'none'), '"None" is not a tier of a Reward');
+
+    // Cunning Make is shared between armour and shields and listed once.
+    const cm = r.data.rewards.find((x) => x.name === 'Cunning Make');
+    assert.deepEqual(cm.appliesTo, ['armour', 'shield']);
+  });
+
+  it('comes seeded with the core gear tables and the 60 Cultural Virtues', async () => {
+    const r = await player('GET', '/compendium');
+    assert.equal(r.status, 200);
+
+    const core = r.data.items.filter((i) => i.source === 'core');
+    assert.equal(core.filter((i) => i.kind === 'weapon').length, 16);
+    assert.equal(core.filter((i) => i.kind === 'armour').length, 5);
+    assert.equal(core.filter((i) => i.kind === 'shield').length, 3);
+
+    const longSword = core.find((i) => i.name === 'Long Sword');
+    assert.equal(longSword.injury, 16);
+    assert.equal(longSword.injuryTwoHanded, 18, 'the per-grip Injury survives the round trip');
+    assert.equal(longSword.damage, 5);
+
+    const mail = core.find((i) => i.name === 'Mail-shirt');
+    assert.equal(mail.protection, 3);
+    assert.equal(mail.type, 'Mail armour');
+    assert.equal(mail.minStandard, 'Common');
+    assert.equal(core.find((i) => i.name === 'Great Shield').minStandard, 'Prosperous');
+    assert.equal(core.find((i) => i.name === 'Helm').minStandard, '', 'Helm is explicitly none');
+
+    assert.equal(r.data.culturalVirtues.length, 60);
+    assert.equal(new Set(r.data.culturalVirtues.map((v) => v.culture)).size, 10);
+    for (const v of r.data.culturalVirtues) assert.equal(v.source, 'core');
+    const bears = r.data.culturalVirtues.find((v) => v.name === 'Brother to Bears');
+    assert.ok(!bears.description.includes('verify the exact symbol'));
+  });
+
+  it('keeps General and Cultural Virtues in separate sections', async () => {
+    const general = await player('GET', '/compendium/virtues');
+    const cultural = await player('GET', '/compendium/culturalVirtues');
+    assert.equal(cultural.status, 200);
+    // The core six live only in `virtues`, never duplicated into the new table.
+    assert.ok(!cultural.data.entries.some((v) => v.name === 'Hardiness'));
+    assert.ok(!general.data.entries.some((v) => v.name === 'Brother to Bears'));
+
+    const mine = await player('POST', '/compendium/culturalVirtues', {
+      name: 'Fen-walker',
+      description: 'Home-brew.',
+      culture: 'Marsh-folk',
+    });
+    assert.equal(mine.status, 201);
+    assert.equal(mine.data.entry.culture, 'Marsh-folk');
+    assert.equal(mine.data.entry.source, 'custom');
+    await player('DELETE', `/compendium/culturalVirtues/${mine.data.entry.id}`);
+  });
+
+  it('drops an unrecognised Minimum Standard of Living rather than storing it', async () => {
+    const r = await player('POST', '/compendium/items', {
+      kind: 'armour',
+      name: 'Gilded plate',
+      minStandard: 'Fabulously Wealthy',
+    });
+    assert.equal(r.data.entry.minStandard, '');
+    const ok = await player('PATCH', `/compendium/items/${r.data.entry.id}`, {
+      minStandard: 'Prosperous',
+    });
+    assert.equal(ok.data.entry.minStandard, 'Prosperous');
+    await player('DELETE', `/compendium/items/${r.data.entry.id}`);
+  });
+
+  it('re-seeding is idempotent and leaves home-brew alone', async () => {
+    const before = await player('GET', '/compendium/virtues');
+    const mine = await player('POST', '/compendium/virtues', {
+      name: 'Woodcraft',
+      effect: 'Home-brew.',
+    });
+    assert.equal(mine.status, 201);
+    assert.equal(mine.data.entry.source, 'custom', 'the app never writes core entries');
+
+    const { migrate } = await import('../server/db/migrate.js');
+    migrate();
+
+    const after = await player('GET', '/compendium/virtues');
+    assert.equal(after.data.entries.length, before.data.entries.length + 1);
+    assert.ok(after.data.entries.some((v) => v.name === 'Woodcraft'));
+    assert.equal(after.data.entries.filter((v) => v.name === 'Confidence').length, 1);
+
+    await player('DELETE', `/compendium/virtues/${mine.data.entry.id}`);
+  });
+
+  it('does CRUD on the Weapons & Armour catalogue', async () => {
+    const created = await player('POST', '/compendium/items', {
+      kind: 'weapon',
+      name: 'Long-hafted axe',
+      type: 'Axe',
+      proficiency: 'Axes',
+      damage: 6,
+      injury: 18,
+      load: 4,
+    });
+    assert.equal(created.status, 201);
+    weaponId = created.data.entry.id;
+    assert.equal(created.data.entry.damage, 6);
+
+    const patched = await player('PATCH', `/compendium/items/${weaponId}`, { load: 5 });
+    assert.equal(patched.data.entry.load, 5);
+    assert.equal(patched.data.entry.name, 'Long-hafted axe', 'a partial patch keeps other fields');
+
+    // An unknown proficiency is dropped rather than stored.
+    const bad = await player('POST', '/compendium/items', { name: 'Odd', proficiency: 'Catapults' });
+    assert.equal(bad.data.entry.proficiency, '');
+    await player('DELETE', `/compendium/items/${bad.data.entry.id}`);
+  });
+
+  it('stores Locations with a list of years visited', async () => {
+    const r = await player('POST', '/compendium/locations', {
+      name: 'Rhosgobel',
+      years: '2946, 2947, 2946',
+      keyInfo: 'Radagast keeps the wood.',
+    });
+    assert.equal(r.status, 201);
+    locationId = r.data.entry.id;
+    assert.deepEqual(r.data.entry.years, ['2946', '2947'], 'years are de-duped');
+    assert.equal(r.data.entry.keyInfo, 'Radagast keeps the wood.');
+
+    const list = await player('GET', '/compendium/locations');
+    assert.ok(list.data.entries.some((l) => l.id === locationId));
+  });
+
+  it('rejects an unknown section', async () => {
+    assert.equal((await player('GET', '/compendium/dragons')).status, 404);
+    assert.equal((await player('POST', '/compendium/dragons', { name: 'Smaug' })).status, 404);
+  });
+
+  it('links a map hex to a Location and clears the link when it is deleted', async () => {
+    const cals = await gm('GET', '/map/calibrations');
+    const calId = cals.data.active?.id;
+    assert.ok(calId, 'the map-derivatives suite should have created a calibration');
+
+    const tagged = await gm('PUT', `/map/calibrations/${calId}/hexes/7/2`, {
+      regionType: 'border',
+      label: 'Rhosgobel',
+      linkedLocationId: locationId,
+    });
+    assert.equal(tagged.status, 200);
+    assert.equal(tagged.data.hex.linkedLocationId, locationId);
+
+    const hexes = await player('GET', `/map/calibrations/${calId}/hexes`);
+    assert.equal(hexes.data.hexes.find((h) => h.col === 7 && h.row === 2).linkedLocationId, locationId);
+
+    // Deleting the Location must not leave the hex pointing at nothing.
+    assert.equal((await player('DELETE', `/compendium/locations/${locationId}`)).status, 200);
+    const after = await player('GET', `/map/calibrations/${calId}/hexes`);
+    assert.equal(after.data.hexes.find((h) => h.col === 7 && h.row === 2).linkedLocationId, null);
+
+    await player('DELETE', `/compendium/items/${weaponId}`);
+  });
+});
+
+describe('Handouts', () => {
+  let hidden;
+  let visible;
+
+  /** A small PNG, posted as multipart the way the browser form does. */
+  async function uploadHandout(fields = {}) {
+    const png = await sharp({
+      create: { width: 900, height: 600, channels: 3, background: '#6b4a22' },
+    })
+      .png()
+      .toBuffer();
+    const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) form.append(k, String(v));
+    form.append('image', new Blob([png], { type: 'image/png' }), 'handout.png');
+    const res = await fetch(`${BASE}/api/handouts`, {
+      method: 'POST',
+      headers: { 'x-orc-token': gmToken },
+      body: form,
+    });
+    return { status: res.status, data: await res.json() };
+  }
+
+  it('creates a handout hidden by default, with web-sized derivatives', async () => {
+    const r = await uploadHandout({ title: "Thror's map", notes: 'Runes on the back.', year: 2946, season: 'Spring' });
+    assert.equal(r.status, 201);
+    hidden = r.data.handout;
+
+    assert.equal(hidden.hidden, true, 'a new handout is GM prep until revealed');
+    assert.equal(hidden.title, "Thror's map");
+    assert.equal(hidden.year, 2946);
+    assert.equal(hidden.season, 'Spring');
+    assert.equal(hidden.imageWidth, 900, 'dimensions are read off the file, not trusted');
+
+    assert.deepEqual(hidden.tiers.map((t) => t.name).sort(), ['thumb', 'view']);
+    for (const t of hidden.tiers) {
+      assert.ok(fs.existsSync(path.join(paths.derivatives, t.file)), `${t.name} not generated`);
+      assert.ok(t.width <= 1600);
+    }
+    // Never leak the on-disk original's name, same as map calibrations.
+    assert.equal(hidden.originalFile, undefined);
+  });
+
+  it('hides a hidden handout from players in the list, the row AND the image', async () => {
+    const asPlayer = await player('GET', '/handouts');
+    assert.equal(asPlayer.status, 200);
+    assert.ok(!asPlayer.data.handouts.some((h) => h.id === hidden.id), 'hidden handout leaked to a player');
+
+    assert.equal((await player('GET', `/handouts/${hidden.id}`)).status, 404);
+
+    const img = await fetch(`${BASE}/api/handouts/${hidden.id}/image/view`, {
+      headers: { 'x-orc-token': playerToken },
+    });
+    assert.equal(img.status, 404, 'a hidden handout\'s image must not be fetchable by id');
+
+    // The GM sees all of it.
+    const asGM = await gm('GET', '/handouts');
+    assert.ok(asGM.data.handouts.some((h) => h.id === hidden.id));
+    assert.equal((await gm('GET', `/handouts/${hidden.id}`)).status, 200);
+  });
+
+  it('reveals and re-hides — the toggle works in both directions', async () => {
+    const shown = await gm('PATCH', `/handouts/${hidden.id}`, { hidden: false });
+    assert.equal(shown.status, 200);
+    assert.equal(shown.data.handout.hidden, false);
+    assert.ok((await player('GET', '/handouts')).data.handouts.some((h) => h.id === hidden.id));
+
+    const img = await fetch(`${BASE}/api/handouts/${hidden.id}/image/thumb`, {
+      headers: { 'x-orc-token': playerToken },
+    });
+    assert.equal(img.status, 200);
+    assert.equal(img.headers.get('content-type'), 'image/webp');
+
+    const rehidden = await gm('PATCH', `/handouts/${hidden.id}`, { hidden: true });
+    assert.equal(rehidden.data.handout.hidden, true, 'revealing must not be one-way');
+    assert.equal((await player('GET', `/handouts/${hidden.id}`)).status, 404);
+  });
+
+  it('serves handout pixels only through the controlled route', async () => {
+    const r = await uploadHandout({ title: 'Letter from Bard', year: 2947, season: 'Autumn', hidden: 'false' });
+    visible = r.data.handout;
+    assert.equal(visible.hidden, false, "an explicit hidden=false creates it visible");
+
+    // Only the two named tiers resolve; a crafted :tier cannot escape.
+    for (const tier of ['full', 'web', 'original', '..%2F..%2Foriginals%2Fhandout.png']) {
+      const bad = await fetch(`${BASE}/api/handouts/${visible.id}/image/${tier}`, {
+        headers: { 'x-orc-token': playerToken },
+      });
+      assert.equal(bad.status, 404, `tier "${tier}" should not resolve`);
+    }
+
+    // And it still needs a passcode.
+    assert.equal((await fetch(`${BASE}/api/handouts/${visible.id}/image/view`)).status, 401);
+  });
+
+  it('keeps writes GM-only, unlike the Compendium', async () => {
+    assert.equal((await player('PATCH', `/handouts/${visible.id}`, { notes: 'nope' })).status, 403);
+    assert.equal((await player('DELETE', `/handouts/${visible.id}`)).status, 403);
+
+    const res = await fetch(`${BASE}/api/handouts`, {
+      method: 'POST',
+      headers: { 'x-orc-token': playerToken },
+      body: new FormData(),
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it('edits notes and re-tags the Year/Season, refusing a bogus season', async () => {
+    const r = await gm('PATCH', `/handouts/${visible.id}`, {
+      notes: 'Sealed with the sigil of Dale.',
+      year: 2948,
+      season: 'Winter',
+    });
+    assert.equal(r.data.handout.notes, 'Sealed with the sigil of Dale.');
+    assert.equal(r.data.handout.year, 2948);
+    assert.equal(r.data.handout.season, 'Winter');
+
+    // A season outside the campaign's own enum leaves the stored one alone.
+    const bogus = await gm('PATCH', `/handouts/${visible.id}`, { season: 'Mud' });
+    assert.equal(bogus.data.handout.season, 'Winter');
+  });
+
+  it('deletes the row and its generated files', async () => {
+    const files = [...hidden.tiers, ...visible.tiers].map((t) =>
+      path.join(paths.derivatives, t.file),
+    );
+    assert.equal((await gm('DELETE', `/handouts/${hidden.id}`)).status, 200);
+    assert.equal((await gm('DELETE', `/handouts/${visible.id}`)).status, 200);
+    assert.equal((await gm('GET', `/handouts/${hidden.id}`)).status, 404);
+    for (const f of files) assert.ok(!fs.existsSync(f), `${f} was left behind`);
+    assert.deepEqual((await gm('GET', '/handouts')).data.handouts, []);
   });
 });
 
@@ -507,9 +839,13 @@ describe('full travel sequence', () => {
     assert.equal(r.status, 400);
   });
 
-  it('only lets the GM roll the Marching Test', async () => {
-    const r = await player('POST', '/travel/marching-test');
-    assert.equal(r.status, 403);
+  it('keeps the GM-only travel steps GM-only', async () => {
+    // The Marching Test is NOT among them — it is the Guide's own TRAVEL roll,
+    // and the Guide is a player. It is exercised at player level below.
+    assert.equal((await player('POST', '/travel/select-target')).status, 403);
+    assert.equal((await player('POST', '/travel/determine-event')).status, 403);
+    assert.equal((await player('POST', '/travel/pin', { col: 2, row: 4 })).status, 403);
+    assert.equal((await player('POST', '/travel/finish')).status, 403);
   });
 
   it('honours a GM manual event pin', async () => {
@@ -577,7 +913,8 @@ describe('full travel sequence', () => {
       const phase = snap.data.travel.phase;
       seen.add(phase);
       if (phase === 'journey_end' || phase === 'awaiting_fatigue_relief') break;
-      if (phase === 'awaiting_marching_test') snap = await gm('POST', '/travel/marching-test');
+      // Rolled at PLAYER level throughout: the Guide makes the Marching Test.
+      if (phase === 'awaiting_marching_test') snap = await player('POST', '/travel/marching-test');
       else if (phase === 'awaiting_target') snap = await gm('POST', '/travel/select-target');
       else if (phase === 'awaiting_target_choice')
         snap = await gm('POST', '/travel/assign-target', { characterId: heroes.hunter });
@@ -687,5 +1024,254 @@ describe('full travel sequence', () => {
 
     const list = await player('GET', '/journeys');
     assert.ok(list.data.journeys.some((x) => x.id === journeyId && x.status === 'complete'));
+  });
+});
+
+/**
+ * Journey-event Fatigue, checked on the persisted character rows rather than on
+ * what the journey log claims happened. Covers the Perilous-Area repeated-event
+ * path and the GM manual-pin path, and confirms a hero with no travel role is
+ * not part of "the Company".
+ */
+describe('travel event Fatigue reaches every Company member', () => {
+  const company = {};
+  let outsiderId;
+  let calibrationId;
+  let journeyId;
+  const startFatigue = {};
+  let eventsRun = 0;
+  let sawCompanyFatigue = false;
+
+  const fatigueOf = async (cid) =>
+    (await player('GET', `/characters/${cid}`)).data.character.sheet.attributes.strength.fatigue;
+
+  /** Select Target → Determine Event → Resolution, asserting the Fatigue deltas. */
+  async function runOneEvent() {
+    const ids = [...Object.values(company), outsiderId];
+    const before = {};
+    for (const cid of ids) before[cid] = await fatigueOf(cid);
+
+    let snap = await gm('POST', '/travel/select-target');
+    assert.equal(snap.status, 200);
+    const eventId = snap.data.travel.state.pendingEvent.eventId;
+    if (snap.data.travel.phase === 'awaiting_target_choice') {
+      snap = await gm('POST', '/travel/assign-target', { characterId: company.hunter });
+      assert.equal(snap.status, 200);
+    }
+    assert.equal(snap.data.travel.phase, 'awaiting_event_die');
+
+    snap = await gm('POST', '/travel/determine-event');
+    assert.equal(snap.status, 200);
+    assert.equal(snap.data.travel.phase, 'awaiting_resolution');
+
+    snap = await player('POST', '/travel/resolve', {});
+    assert.equal(snap.status, 200, JSON.stringify(snap.data));
+
+    const row = snap.data.events.find((e) => e.id === eventId);
+    assert.ok(row, 'the resolved event row should be in the snapshot');
+
+    // Mishap gives its target 1 Fatigue on top of the Company's, on a failure.
+    const targetExtra = row.eventKey === 'mishap' && row.outcome === 'failure' ? 1 : 0;
+
+    for (const cid of Object.values(company)) {
+      const after = await fatigueOf(cid);
+      const expected = before[cid] + row.companyFatigue + (cid === row.targetCharacterId ? targetExtra : 0);
+      assert.equal(
+        after,
+        expected,
+        `${row.eventName} (${row.outcome}): ${cid} should be at ${expected} Fatigue, not ${after}`,
+      );
+    }
+    // A hero with no travel role is not in the Company and gains nothing.
+    assert.equal(await fatigueOf(outsiderId), before[outsiderId], 'a role-less hero is not travelling');
+
+    eventsRun += 1;
+    if (row.companyFatigue > 0) sawCompanyFatigue = true;
+    return row;
+  }
+
+  it('sets up a Company on a route with a Perilous Area', async () => {
+    await gm('PATCH', '/campaign', { year: 2946, season: 'Summer', tnBase: 20 });
+
+    const specs = [
+      ['Fatigue Guide', 'guide'],
+      ['Fatigue Hunter', 'hunter'],
+      ['Fatigue Lookout', 'lookout'],
+      ['Fatigue Scout', 'scout'],
+    ];
+    const roles = {};
+    for (const [name, role] of specs) {
+      const c = (await player('POST', '/characters', { name })).data.character;
+      const sheet = c.sheet;
+      sheet.attributes.strength.rating = 4;
+      sheet.attributes.heart.rating = 4;
+      sheet.attributes.wits.rating = 4;
+      sheet.attributes.strength.endurance = 30;
+      sheet.attributes.heart.skills.Travel.rating = 2;
+      sheet.attributes.strength.skills.Hunting.rating = 2;
+      sheet.attributes.strength.skills.Awareness.rating = 2;
+      sheet.attributes.wits.skills.Explore.rating = 2;
+      sheet.attributes.heart.hope = 8;
+      sheet.attributes.heart.hopeMax = 8;
+      // No mounts: mount Vigour must not muddy the per-event Fatigue arithmetic.
+      await player('PUT', `/characters/${c.id}/sheet`, { sheet });
+      company[role] = c.id;
+      roles[c.id] = role;
+    }
+
+    outsiderId = (await player('POST', '/characters', { name: 'Stays Behind' })).data.character.id;
+
+    const cals = await gm('GET', '/map/calibrations');
+    calibrationId = cals.data.active.id;
+
+    // Row 9 keeps this route clear of the one the earlier suite tagged on row 4.
+    const route = Array.from({ length: 6 }, (_, i) => ({ col: i, row: 9 }));
+    const tags = route.map((h, i) => ({
+      ...h,
+      regionType: 'wild',
+      hardTerrain: false,
+      road: false,
+      perilous: i === 2,
+      perilRating: i === 2 ? 2 : 0,
+    }));
+    assert.equal((await gm('POST', `/map/calibrations/${calibrationId}/hexes/bulk`, { hexes: tags })).status, 200);
+
+    const rolesRes = await player('PUT', '/party/roles', { roles });
+    assert.equal(rolesRes.data.roleCheck.valid, true);
+    await gm('PATCH', '/party', { route, mounted: false, forcedMarch: false });
+
+    const start = await gm('POST', '/travel/start', { fromLabel: 'Woodmen-town', toLabel: 'Mountains of Mirkwood' });
+    assert.equal(start.status, 200);
+    journeyId = start.data.journey.id;
+
+    for (const cid of [...Object.values(company), outsiderId]) startFatigue[cid] = await fatigueOf(cid);
+    assert.deepEqual(Object.values(startFatigue), [0, 0, 0, 0, 0], 'everyone sets out unfatigued');
+  });
+
+  it('honours a GM pin and halts the Company inside the Perilous Area', async () => {
+    const pin = await gm('POST', '/travel/pin', { col: 2, row: 9 });
+    assert.equal(pin.status, 200);
+
+    const mt = await gm('POST', '/travel/marching-test');
+    assert.equal(mt.status, 200);
+    // The pin, not the dice, chose the distance.
+    assert.equal(mt.data.journey.routeIndex, 2);
+    assert.equal(mt.data.travel.phase, 'awaiting_target');
+    assert.equal(mt.data.travel.state.perilousArea, true);
+    // Peril rating 2 -> two events back-to-back with no Marching Test between.
+    assert.equal(mt.data.travel.state.eventsRemainingHere, 2);
+  });
+
+  it('adds each event Fatigue to every Company member persisted sheet', { timeout: 60000 }, async () => {
+    // Both Perilous-Area events, then keep going until at least one event has
+    // actually charged the Company Fatigue (Joyful Sight and a successful
+    // Chance-meeting both cost nothing, so a fixed event count could see zero).
+    let guard = 0;
+    while (guard < 40) {
+      guard += 1;
+      const phase = (await gm('GET', '/travel')).data.travel.phase;
+      if (phase === 'awaiting_target') {
+        await runOneEvent();
+        if (sawCompanyFatigue && eventsRun >= 2) break;
+      } else if (phase === 'awaiting_marching_test') {
+        assert.equal((await gm('POST', '/travel/marching-test')).status, 200);
+      } else if (phase === 'journey_end') {
+        break;
+      } else {
+        throw new Error(`unexpected phase ${phase}`);
+      }
+    }
+    assert.ok(eventsRun >= 2, `expected at least 2 events, ran ${eventsRun}`);
+    assert.ok(sawCompanyFatigue, 'expected at least one event to charge Company Fatigue');
+  });
+
+  it('ran the two Perilous-Area events with no Marching Test between them', async () => {
+    const { data } = await player('GET', `/journeys/${journeyId}`);
+    const perilous = data.events.filter((e) => e.kind === 'event' && e.perilous);
+    assert.equal(perilous.length, 2, 'peril rating 2 should produce exactly two events in the area');
+    const first = data.events.findIndex((e) => e.id === perilous[0].id);
+    const second = data.events.findIndex((e) => e.id === perilous[1].id);
+    const between = data.events.slice(first, second).filter((e) => e.kind === 'marching_test');
+    assert.equal(between.length, 0);
+  });
+
+  it('leaves every Company member more Fatigued than when they set out', async () => {
+    for (const [role, cid] of Object.entries(company)) {
+      const now = await fatigueOf(cid);
+      assert.ok(now > startFatigue[cid], `${role} should have gained Fatigue (still ${now})`);
+    }
+    assert.equal(await fatigueOf(outsiderId), 0, 'the hero with no travel role gained nothing');
+  });
+
+  it('closes the journey out', async () => {
+    assert.equal((await gm('POST', '/travel/abandon')).status, 200);
+  });
+});
+
+/**
+ * Spending Success icons is a record, not a mechanic — but the choice has to
+ * reach the channel the roll was announced in. DISCORD_WEBHOOK_URL is unset in
+ * the test env, so what we can assert is that a post was *attempted* with the
+ * right content and the right whisper handling.
+ */
+describe('Special Success spends are announced to Discord', () => {
+  /** Roll enough dice that Success icons are all but certain, and retry if not. */
+  async function rollWithIcons(body) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const r = await player('POST', '/rolls', { rating: 24, targetNumber: 1, ...body });
+      assert.equal(r.status, 200);
+      if (r.data.result.icons >= 2) return r.data;
+    }
+    throw new Error('could not roll 2 Success icons in 20 attempts');
+  }
+
+  it('posts a follow-up naming only the newly spent icons', async () => {
+    const rolled = await rollWithIcons({ label: 'AWE', actorName: 'Beorn' });
+    const id = rolled.roll.id;
+
+    const first = await player('PATCH', `/rolls/${id}`, { specialSuccesses: ['Gain Insight'] });
+    assert.equal(first.status, 200);
+    assert.equal(first.data.discord.posted, false);
+    assert.equal(first.data.discord.reason, 'not-configured', 'a post was attempted');
+
+    const second = await player('PATCH', `/rolls/${id}`, {
+      specialSuccesses: ['Gain Insight', 'Make Haste'],
+    });
+    assert.equal(second.status, 200);
+    assert.deepEqual(second.data.roll.specialSuccesses, ['Gain Insight', 'Make Haste']);
+
+    const sent = (await gm('GET', '/rolls/discord/status')).data.recent.map((m) => m.content);
+    assert.ok(
+      sent.some((m) => m === '✨ Beorn spends a success icon on AWE: Gain Insight'),
+      `first spend not announced; saw ${JSON.stringify(sent.slice(0, 4))}`,
+    );
+    assert.ok(
+      sent.some((m) => m === '✨ Beorn spends a success icon on AWE: Make Haste'),
+      'second spend should announce only the new pick',
+    );
+    assert.ok(
+      !sent.some((m) => m.includes('Gain Insight, Make Haste')),
+      'the whole list must not be re-announced on every save',
+    );
+  });
+
+  it('says nothing when a pick is only cleared', async () => {
+    const rolled = await rollWithIcons({ label: 'LORE', actorName: 'Gandalf' });
+    const id = rolled.roll.id;
+    await player('PATCH', `/rolls/${id}`, { specialSuccesses: ['Widen Influence'] });
+    const cleared = await player('PATCH', `/rolls/${id}`, { specialSuccesses: [] });
+    assert.equal(cleared.status, 200);
+    assert.deepEqual(cleared.data.roll.specialSuccesses, []);
+    assert.equal(cleared.data.discord, null, 'clearing a pick is not worth a post');
+  });
+
+  it('keeps a whispered roll whispered', async () => {
+    const rolled = await rollWithIcons({ label: 'STEALTH', actorName: 'Bilbo', whisperTo: 'gm' });
+    const r = await player('PATCH', `/rolls/${rolled.roll.id}`, {
+      specialSuccesses: ['Go Quietly'],
+    });
+    assert.equal(r.status, 200);
+    assert.equal(r.data.discord.posted, false);
+    assert.equal(r.data.discord.reason, 'whispered');
   });
 });

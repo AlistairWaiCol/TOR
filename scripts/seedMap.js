@@ -20,8 +20,7 @@ import { migrate } from '../server/db/migrate.js';
 import { ensureDirs, generateDerivatives, readImageMeta } from '../server/lib/images.js';
 import { createCalibration, listCalibrations } from '../server/lib/store.js';
 
-const DEFAULT_SOURCE =
-  'D:\\Google Drive\\Sorted Books\\RPG Books\\Free League\\The One Ring\\1e stuff\\Maps\\northlands22.png';
+const DEFAULT_SOURCE = "D:\\Downloads\\Wilderland Adventurer's Map_page-0001.jpg";
 
 const source = process.argv[2] || DEFAULT_SOURCE;
 
@@ -64,7 +63,7 @@ if (!calibration) {
   console.log(`Reusing calibration ${calibration.id}.`);
 }
 
-console.log('Generating web-sized derivatives (this takes a few seconds for a 29MB source) …');
+console.log('Generating web-sized derivatives (this takes a few seconds for a large source) …');
 const tiers = await generateDerivatives(dest, calibration.id);
 await db
   .update(schema.mapCalibrations)

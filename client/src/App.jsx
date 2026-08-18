@@ -8,7 +8,10 @@ import MapView from './pages/MapView.jsx';
 import Calibration from './pages/Calibration.jsx';
 import Journeys from './pages/Journeys.jsx';
 import JourneyDetail from './pages/JourneyDetail.jsx';
+import Compendium from './pages/Compendium.jsx';
+import Handouts from './pages/Handouts.jsx';
 import ComingSoon from './pages/ComingSoon.jsx';
+import TurnPrompt from './components/TurnPrompt.jsx';
 
 /**
  * Nav is data-driven so the v2 sections (combat tracker, bestiary, session
@@ -19,6 +22,8 @@ const NAV = [
   { section: 'Campaign' },
   { to: '/', label: 'Overview', end: true },
   { to: '/characters', label: 'Characters' },
+  { to: '/compendium', label: 'Compendium' },
+  { to: '/handouts', label: 'Handouts' },
   { section: 'Travel' },
   { to: '/map', label: 'Map & Travel' },
   { to: '/journeys', label: 'Journey Log' },
@@ -30,6 +35,36 @@ const NAV = [
   { to: '/notes', label: 'Session Notes', soon: true },
 ];
 
+/**
+ * "Which of these heroes am I playing?" — stored in localStorage, per browser.
+ *
+ * Explicitly NOT a permission: anyone may still open and edit any sheet, the
+ * same as before. All it does is decide who the travel engine's "your turn to
+ * roll" prompts are addressed to.
+ */
+function PlayingAsPicker() {
+  const { characters, playingAs, setPlayingAs } = useApp();
+  return (
+    <div className="play-as">
+      <label className="field" style={{ marginBottom: 0 }}>
+        <span>Playing as</span>
+        <select
+          value={playingAs}
+          onChange={(e) => setPlayingAs(e.target.value)}
+          title="Local to this browser — it decides who gets prompted to roll, nothing else"
+        >
+          <option value="">— nobody in particular —</option>
+          {characters.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 function Sidebar() {
   const { isGM, role, logout, connected, campaign } = useApp();
   return (
@@ -38,6 +73,8 @@ function Sidebar() {
         One Ring Companion
         <small>Darkening of Mirkwood</small>
       </div>
+
+      <PlayingAsPicker />
 
       {NAV.map((item, i) => {
         if (item.section) {
@@ -112,6 +149,8 @@ export default function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/characters" element={<Characters />} />
           <Route path="/characters/:id" element={<CharacterSheet />} />
+          <Route path="/compendium" element={<Compendium />} />
+          <Route path="/handouts" element={<Handouts />} />
           <Route path="/map" element={<MapView />} />
           <Route
             path="/calibration"
@@ -129,6 +168,9 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+      {/* At the shell, not inside the Map page: "it's your turn" is most useful
+          to a player who is looking at something else. */}
+      <TurnPrompt />
     </div>
   );
 }

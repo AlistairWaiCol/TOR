@@ -642,6 +642,100 @@ td select {
   margin-bottom: 0;
 }
 
+/* --- handouts -------------------------------------------------------------- */
+
+.handout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+}
+.handout-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+/* Hidden handouts are GM-only anyway; the dashed edge makes that obvious at a
+   glance without hiding the card's own content. */
+.handout-card.is-hidden {
+  border-style: dashed;
+  border-color: var(--red);
+}
+.handout-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: #0d0b09;
+  cursor: zoom-in;
+}
+.handout-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.handout-card.is-hidden .handout-thumb img {
+  opacity: 0.72;
+}
+.handout-meta {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.handout-meta p {
+  margin: 0;
+}
+
+.modal.handout-modal {
+  max-width: 900px;
+}
+.handout-full {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 58vh;
+  object-fit: contain;
+  background: #0d0b09;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+/* --- "who am I playing" prompt --------------------------------------------- */
+
+.play-as {
+  padding: 4px 8px 0;
+}
+.play-as select {
+  font-size: 0.85rem;
+  padding: 4px 6px;
+}
+
+/* Rendered at the app shell so it follows the player off the Map page. */
+.turn-prompt {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  max-width: 340px;
+  background: var(--panel-2);
+  border: 1px solid var(--gold);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.turn-prompt h3 {
+  color: var(--gold);
+  margin: 0 0 4px;
+}
+
 .sticky-bar {
   position: sticky;
   bottom: 0;

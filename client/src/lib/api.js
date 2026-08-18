@@ -44,3 +44,8 @@ export const api = {
 export function mapImageUrl(calibrationId, tier = 'web') {
   return `/api/map/calibrations/${calibrationId}/image/${tier}`;
 }
+
+/** The only route handout pixels come from — see server/routes/handouts.js. */
+export function handoutImageUrl(handoutId, tier = 'view') {
+  return `/api/handouts/${handoutId}/image/${tier}`;
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   JOURNEY_EVENTS,
@@ -12,6 +12,7 @@ import {
 } from '@shared/journey.js';
 import { hexKey } from '@shared/hexMath.js';
 import { api } from '../lib/api.js';
+import { saveJourneyMap } from '../lib/journeyMap.js';
 import { getSocket } from '../lib/socket.js';
 import { useApp } from '../state/AppContext.jsx';
 import HexMap from '../components/HexMap.jsx';
@@ -29,8 +30,22 @@ const PHASE_STEPS = [
 ];
 
 export default function MapView() {
-  const { isGM, calibration, hexes, party, travel, journey, events, characters, campaign, rollFeed, refresh } =
-    useApp();
+  const {
+    isGM,
+    calibration,
+    hexes,
+    locations,
+    party,
+    travel,
+    journey,
+    events,
+    characters,
+    campaign,
+    rollFeed,
+    refresh,
+  } = useApp();
+  const mapWrapRef = useRef(null);
+  const [hoverLocation, setHoverLocation] = useState(null);
   const [tier, setTier] = useState('web');
   const [zoom, setZoom] = useState(0.9);
   const [showGrid, setShowGrid] = useState(true);
@@ -56,6 +71,30 @@ export default function MapView() {
     for (const h of hexes) m.set(hexKey(h.col, h.row), h);
     return m;
   }, [hexes]);
+
+  const locationIndex = useMemo(() => {
+    const m = new Map();
+    for (const l of locations) m.set(l.id, l);
+    return m;
+  }, [locations]);
+
+  /** The Compendium Location a hex is tagged with, if any. */
+  const locationForHex = (hx) => {
+    const tag = hexIndex.get(hexKey(hx.col, hx.row));
+    return tag?.linkedLocationId ? locationIndex.get(tag.linkedLocationId) ?? null : null;
+  };
+
+  const onHexHover = (hx, at) => {
+    if (!hx) return setHoverLocation(null);
+    const location = locationForHex(hx);
+    if (!location) return setHoverLocation(null);
+    const rect = mapWrapRef.current?.getBoundingClientRect();
+    return setHoverLocation({
+      location,
+      x: rect ? at.clientX - rect.left : 0,
+      y: rect ? at.clientY - rect.top : 0,
+    });
+  };
 
   const nameOf = (id) => characters.find((c) => c.id === id)?.name ?? 'unknown';
   const targetCharacter = pending?.targetCharacterId
@@ -177,18 +216,46 @@ export default function MapView() {
             <CheckField label="grid" checked={showGrid} onChange={setShowGrid} />
           </div>
 
-          <HexMap
-            calibration={calibration}
-            hexes={hexes}
-            tier={tier}
-            zoom={zoom}
-            showGrid={showGrid}
-            route={route}
-            currentHex={currentPos}
-            pinHex={tstate.manualPin ?? null}
-            selected={inspect && !inspect.untagged ? inspect : null}
-            onHexClick={onHexClick}
-          />
+          <div style={{ position: 'relative' }} ref={mapWrapRef}>
+            <HexMap
+              calibration={calibration}
+              hexes={hexes}
+              tier={tier}
+              zoom={zoom}
+              showGrid={showGrid}
+              // Hex tagging (region colour, hard terrain, roads, Perilous
+              // Areas, labels) is GM prep — players get the plain map, the grid
+              // lines they need to click a route, the party token and the route.
+              showTags={isGM}
+              route={route}
+              currentHex={currentPos}
+              pinHex={tstate.manualPin ?? null}
+              selected={inspect && !inspect.untagged ? inspect : null}
+              onHexClick={onHexClick}
+              onHexHover={onHexHover}
+            />
+            {hoverLocation ? (
+              <div
+                className="panel"
+                style={{
+                  position: 'absolute',
+                  left: Math.max(0, hoverLocation.x + 14),
+                  top: Math.max(0, hoverLocation.y + 14),
+                  padding: '6px 10px',
+                  margin: 0,
+                  maxWidth: 240,
+                  pointerEvents: 'none',
+                  zIndex: 5,
+                }}
+              >
+                <strong>{hoverLocation.location.name || '(unnamed location)'}</strong>
+                {hoverLocation.location.years?.length ? (
+                  <div className="small muted">{hoverLocation.location.years.join(', ')}</div>
+                ) : null}
+                <div className="small muted">click the hex in Inspect mode for details</div>
+              </div>
+            ) : null}
+          </div>
 
           <div className="row" style={{ marginTop: 8 }}>
             <span className="small muted">
@@ -225,6 +292,34 @@ export default function MapView() {
                 {inspect.untagged ? <span className="pill">untagged (defaults to Wild Land)</span> : null}
                 <span className="pill">event dice mod {terrainDiceModifier(inspect) >= 0 ? '+' : ''}{terrainDiceModifier(inspect)}</span>
               </div>
+              {(() => {
+                const location = inspect.linkedLocationId
+                  ? locationIndex.get(inspect.linkedLocationId)
+                  : null;
+                if (!location) return null;
+                return (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>{location.name || '(unnamed location)'}</strong>{' '}
+                    <Link className="small" to={`/compendium#location-${location.id}`}>
+                      open in Compendium →
+                    </Link>
+                    {location.years?.length ? (
+                      <div className="row" style={{ marginTop: 4 }}>
+                        {location.years.map((y) => (
+                          <span className="pill gold" key={y}>
+                            {y}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {location.keyInfo ? (
+                      <p className="small muted" style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+                        {location.keyInfo}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })()}
             </div>
           ) : null}
         </div>
@@ -518,7 +613,19 @@ export default function MapView() {
                     ))}
                     {isGM ? (
                       <div className="row" style={{ marginTop: 8 }}>
-                        <button className="primary" disabled={busy} onClick={() => call(() => api.post('/travel/close'))}>
+                        <button
+                          className="primary"
+                          disabled={busy}
+                          onClick={() =>
+                            call(async () => {
+                              // Snapshot the travelled route for the Journey Log
+                              // before closing out — after this the live travel
+                              // state is gone.
+                              await saveJourneyMap(api, { calibration, journey, events });
+                              await api.post('/travel/close');
+                            })
+                          }
+                        >
                           Close out journey
                         </button>
                         {journey ? <Link to={`/journeys/${journey.id}`}>view log</Link> : null}

@@ -87,14 +87,29 @@ function optionFor(quality, value) {
   return quality.options.find((o) => o.value === value) || quality.options[0];
 }
 
+/**
+ * The Injury rating actually in use, before Rewards.
+ *
+ * Long Sword, Spear and Long-hafted Axe each have two Injury ratings, one per
+ * grip (Damage does not change). Every other weapon has `injuryTwoHanded: 0`
+ * and this is just its Injury.
+ */
+export function gripInjury(weapon = {}) {
+  const twoHanded = Number(weapon.injuryTwoHanded) || 0;
+  if (twoHanded && weapon.grip === '2h') return twoHanded;
+  return Number(weapon.injury) || 0;
+}
+
 /** Effective weapon numbers after Fell / Grievous / Keen are applied. */
 export function effectiveWeapon(weapon = {}, { valour = 0 } = {}) {
   const fell = optionFor(WEAPON_QUALITIES.fell, weapon.fell);
   const grievous = optionFor(WEAPON_QUALITIES.grievous, weapon.grievous);
   const keen = optionFor(WEAPON_QUALITIES.keen, weapon.keen);
+  const baseInjury = gripInjury(weapon);
   return {
     damage: (Number(weapon.damage) || 0) + (grievous.damage || 0),
-    injury: (Number(weapon.injury) || 0) + (fell.injury || 0),
+    baseInjury,
+    injury: baseInjury + (fell.injury || 0),
     load: Number(weapon.load) || 0,
     piercingThreshold: keen.piercing ?? 10,
     bonuses: { damage: grievous.damage || 0, injury: fell.injury || 0 },

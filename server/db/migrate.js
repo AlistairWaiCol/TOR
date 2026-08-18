@@ -9,6 +9,7 @@
  */
 
 import { getSqlite } from './index.js';
+import { seedCompendium } from './seedCompendium.js';
 
 const STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS campaign_state (
@@ -158,6 +159,22 @@ const STATEMENTS = [
    )`,
   `CREATE INDEX IF NOT EXISTS rolls_journey_idx ON rolls (journey_id)`,
 
+  `CREATE TABLE IF NOT EXISTS handouts (
+     id TEXT PRIMARY KEY,
+     title TEXT NOT NULL DEFAULT '',
+     notes TEXT NOT NULL DEFAULT '',
+     year INTEGER NOT NULL DEFAULT 0,
+     season TEXT NOT NULL DEFAULT 'Spring',
+     hidden INTEGER NOT NULL DEFAULT 1,
+     original_file TEXT NOT NULL DEFAULT '',
+     image_width INTEGER NOT NULL DEFAULT 0,
+     image_height INTEGER NOT NULL DEFAULT 0,
+     tiers TEXT NOT NULL DEFAULT '[]',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
+  `CREATE INDEX IF NOT EXISTS handouts_year_season_idx ON handouts (year, season)`,
+
   `CREATE TABLE IF NOT EXISTS travel_state (
      id TEXT PRIMARY KEY,
      journey_id TEXT,
@@ -165,7 +182,89 @@ const STATEMENTS = [
      state TEXT NOT NULL DEFAULT '{}',
      updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
    )`,
+
+  // --- Compendium ---
+  `CREATE TABLE IF NOT EXISTS virtues (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     effect TEXT NOT NULL DEFAULT '',
+     source TEXT NOT NULL DEFAULT 'custom',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS reward_definitions (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     code TEXT NOT NULL DEFAULT '',
+     applies_to TEXT NOT NULL DEFAULT '[]',
+     summary TEXT NOT NULL DEFAULT '',
+     tiers TEXT NOT NULL DEFAULT '[]',
+     source TEXT NOT NULL DEFAULT 'custom',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS items_catalogue (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL DEFAULT 'weapon',
+     name TEXT NOT NULL DEFAULT '',
+     type TEXT NOT NULL DEFAULT '',
+     proficiency TEXT NOT NULL DEFAULT '',
+     damage INTEGER NOT NULL DEFAULT 0,
+     injury INTEGER NOT NULL DEFAULT 0,
+     injury_two_handed INTEGER NOT NULL DEFAULT 0,
+     protection INTEGER NOT NULL DEFAULT 0,
+     parry INTEGER NOT NULL DEFAULT 0,
+     load INTEGER NOT NULL DEFAULT 0,
+     min_standard TEXT NOT NULL DEFAULT '',
+     notes TEXT NOT NULL DEFAULT '',
+     source TEXT NOT NULL DEFAULT 'custom',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS cultural_virtues (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     description TEXT NOT NULL DEFAULT '',
+     culture TEXT NOT NULL DEFAULT '',
+     source TEXT NOT NULL DEFAULT 'custom',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
+  `CREATE INDEX IF NOT EXISTS cultural_virtues_culture_idx ON cultural_virtues (culture)`,
+
+  `CREATE TABLE IF NOT EXISTS locations (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     years TEXT NOT NULL DEFAULT '[]',
+     key_info TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
 ];
+
+/**
+ * Columns added to tables that already exist in the wild. SQLite has no
+ * `ADD COLUMN IF NOT EXISTS`, so each is guarded by a table_info read. This is
+ * the one place SQLite-specific SQL lives, and it is also the file that gets
+ * replaced wholesale by drizzle-kit on the Postgres swap.
+ */
+const ADDED_COLUMNS = [
+  ['hexes', 'linked_location_id', 'TEXT'],
+  ['journeys', 'map_snapshot', "TEXT NOT NULL DEFAULT ''"],
+  ['items_catalogue', 'injury_two_handed', 'INTEGER NOT NULL DEFAULT 0'],
+  ['items_catalogue', 'min_standard', "TEXT NOT NULL DEFAULT ''"],
+];
+
+function addMissingColumns(sqlite) {
+  for (const [table, column, ddl] of ADDED_COLUMNS) {
+    const existing = sqlite.prepare(`PRAGMA table_info(${table})`).all();
+    if (existing.some((c) => c.name === column)) continue;
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  }
+}
 
 const SEEDS = [
   `INSERT INTO campaign_state (id, year, season, tn_base)
@@ -179,7 +278,10 @@ const SEEDS = [
 
 export function migrate() {
   const sqlite = getSqlite();
-  for (const stmt of [...STATEMENTS, ...SEEDS]) sqlite.exec(stmt);
+  for (const stmt of STATEMENTS) sqlite.exec(stmt);
+  addMissingColumns(sqlite);
+  for (const stmt of SEEDS) sqlite.exec(stmt);
+  seedCompendium(sqlite);
   return true;
 }
 

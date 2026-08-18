@@ -17,6 +17,7 @@ import {
   listHexes,
   getJourney,
   listJourneyEvents,
+  listCompendium,
 } from './lib/store.js';
 
 let io = null;
@@ -35,12 +36,14 @@ export function broadcastToGM(event, payload) {
 
 /** Full snapshot of everything the live map view needs. */
 export async function buildSnapshot() {
-  const [campaign, party, travel, characters, calibration] = await Promise.all([
+  const [campaign, party, travel, characters, calibration, locationList] = await Promise.all([
     getCampaign(),
     getParty(),
     getTravelState(),
     listCharacters(),
     getActiveCalibration(),
+    // The live map needs Locations to resolve a hex's linkedLocationId.
+    listCompendium('locations'),
   ]);
   const hexList = calibration ? await listHexes(calibration.id) : [];
   let journey = null;
@@ -57,6 +60,7 @@ export async function buildSnapshot() {
     events,
     calibration,
     hexes: hexList,
+    locations: locationList,
     characters: characters.map((c) => ({
       id: c.id,
       name: c.name,

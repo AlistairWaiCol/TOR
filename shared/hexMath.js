@@ -7,15 +7,15 @@
  * at every derivative resolution.
  */
 
-/** Measured starting values for northlands22.png (5079x3189), per spec §6a. */
+/** Measured starting values for the Wilderland Adventurer's Map (6600x5100), per spec §6a. */
 export const DEFAULT_CALIBRATION = {
   orientation: 'flat-top',
   layout: 'offset-columns',
-  hexEdge: 71, // centre to vertex
-  hexWidth: 142, // point-to-point, horizontal
-  hexHeight: 123, // flat-to-flat, vertical
-  colSpacing: 106, // column-to-column horizontal spacing
-  colOffset: 62, // vertical offset of odd columns (half the height)
+  hexEdge: 70, // centre to vertex
+  hexWidth: 140, // point-to-point, horizontal
+  hexHeight: 121, // flat-to-flat, vertical
+  colSpacing: 105, // column-to-column horizontal spacing
+  colOffset: 60, // vertical offset of odd columns (half the height)
   offsetX: 0, // grid origin (centre of hex 0,0)
   offsetY: 0,
   rotation: 0, // degrees, clockwise, about the grid origin

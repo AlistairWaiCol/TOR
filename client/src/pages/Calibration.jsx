@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { DEFAULT_CALIBRATION, hexKey } from '@shared/hexMath.js';
 import { REGION_TYPES } from '@shared/journey.js';
 import { api } from '../lib/api.js';
@@ -24,10 +25,11 @@ const BLANK_TAGS = {
   perilous: false,
   perilRating: 0,
   label: '',
+  linkedLocationId: '',
 };
 
 export default function Calibration() {
-  const { refresh } = useApp();
+  const { refresh, locations } = useApp();
   const [calibrations, setCalibrations] = useState([]);
   const [active, setActive] = useState(null);
   const [grid, setGrid] = useState(null);
@@ -136,7 +138,11 @@ export default function Calibration() {
     }
     setSelected(hx);
     const existing = hexIndex.get(hexKey(hx.col, hx.row));
-    setTags(existing ? { ...BLANK_TAGS, ...existing } : { ...BLANK_TAGS });
+    setTags(
+      existing
+        ? { ...BLANK_TAGS, ...existing, linkedLocationId: existing.linkedLocationId ?? '' }
+        : { ...BLANK_TAGS },
+    );
   };
 
   const saveHex = async () => {
@@ -226,7 +232,7 @@ export default function Calibration() {
           </p>
         ) : (
           <p className="small muted" style={{ marginBottom: 0 }}>
-            No map yet. Run <span className="mono">npm run seed:map</span> to drop northlands22.png into
+            No map yet. Run <span className="mono">npm run seed:map</span> to drop the Wilderland map into
             uploads/seed, then click "Use seeded map".
           </p>
         )}
@@ -294,8 +300,8 @@ export default function Calibration() {
             <div className="panel">
               <h2>Hex grid</h2>
               <p className="small muted">
-                Seeded with the measured values for northlands22.png (flat-top, offset columns). True
-                them up against landmarks you recognise, then save.
+                Seeded with the measured values for the Wilderland Adventurer's Map (flat-top, offset
+                columns). True them up against landmarks you recognise, then save.
               </p>
               {SLIDERS.map((s) => (
                 <div className="slider-row" key={s.key}>
@@ -351,6 +357,21 @@ export default function Calibration() {
                       <NumField label="Peril rating (events to face)" value={tags.perilRating} onChange={(v) => setTags({ ...tags, perilRating: v })} min={0} />
                     ) : null}
                     <TextField label="Label" value={tags.label} onChange={(v) => setTags({ ...tags, label: v })} />
+                    <SelectField
+                      label="Linked Location (Compendium)"
+                      value={tags.linkedLocationId ?? ''}
+                      onChange={(v) => setTags({ ...tags, linkedLocationId: v })}
+                      options={[
+                        { value: '', label: '— none —' },
+                        ...locations.map((l) => ({ value: l.id, label: l.name || '(unnamed)' })),
+                      ]}
+                    />
+                    {locations.length === 0 ? (
+                      <p className="small muted">
+                        No Locations yet — add them on the <Link to="/compendium">Compendium</Link>{' '}
+                        screen and they will appear here.
+                      </p>
+                    ) : null}
                     <div className="row">
                       <button className="primary" onClick={saveHex}>
                         Save hex

@@ -34,15 +34,26 @@ export function RollProvider({ children }) {
 }
 
 function RollModal({ config, onClose }) {
+  // Attack rolls take the target's Parry rather than a raw TN: in TOR 2e an
+  // attack's Target Number is the attacker's STRENGTH TN raised by the target's
+  // Parry, and the target is usually an NPC with no sheet in this app.
+  const parryTarget = Boolean(config.parryTarget);
+  const strengthTN = Number(config.strengthTN) || 0;
+
   const [form, setForm] = useState(() => ({
     rating: config.rating ?? 0,
     targetNumber: config.targetNumber ?? 14,
+    targetParry: config.targetParry ?? 0,
     favourState: config.illFavoured ? 'Ill-Favoured' : config.favoured ? 'Favoured' : 'Normal',
     extraDice: config.extraDice ?? 0,
     bonus: config.bonus ?? 0,
     hopeSpent: false,
     whisperTo: config.whisperTo ?? 'public',
   }));
+
+  const targetNumber = parryTarget
+    ? strengthTN + (Number(form.targetParry) || 0)
+    : Number(form.targetNumber);
   const [state, setState] = useState('idle'); // idle | rolling | done | error
   const [outcome, setOutcome] = useState(null);
   const [error, setError] = useState('');
@@ -63,7 +74,7 @@ function RollModal({ config, onClose }) {
         kind: config.kind ?? 'skill',
         label: config.label ?? config.skill ?? 'Roll',
         rating: Number(form.rating),
-        targetNumber: Number(form.targetNumber),
+        targetNumber,
         favoured: form.favourState === 'Favoured',
         illFavoured: form.favourState === 'Ill-Favoured',
         extraDice: Number(form.extraDice),
@@ -122,18 +133,37 @@ function RollModal({ config, onClose }) {
         </div>
 
         {config.note ? <div className="info-box">{config.note}</div> : null}
+        {config.warning ? <div className="warn-box">{config.warning}</div> : null}
         {error ? <div className="error-box">{error}</div> : null}
 
         {state !== 'done' ? (
           <>
             <div className="grid g3">
               <NumField label="Success Dice (rating)" value={form.rating} onChange={set('rating')} min={0} />
-              <NumField
-                label="Target Number"
-                value={form.targetNumber}
-                onChange={set('targetNumber')}
-                min={1}
-              />
+              {parryTarget ? (
+                <label className="field">
+                  <span>Target's Parry</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.targetParry}
+                    autoFocus
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, targetParry: e.target.value === '' ? 0 : Number(e.target.value) }))
+                    }
+                  />
+                  <span className="small muted">
+                    TN {strengthTN} (STRENGTH) + {Number(form.targetParry) || 0} = <strong>{targetNumber}</strong>
+                  </span>
+                </label>
+              ) : (
+                <NumField
+                  label="Target Number"
+                  value={form.targetNumber}
+                  onChange={set('targetNumber')}
+                  min={1}
+                />
+              )}
               <SelectField
                 label="Feat modifier"
                 value={form.favourState}

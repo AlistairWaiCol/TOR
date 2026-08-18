@@ -70,6 +70,8 @@ export const hexes = sqliteTable(
     perilous: integer('perilous', { mode: 'boolean' }).notNull().default(false),
     perilRating: integer('peril_rating').notNull().default(0),
     label: text('label').notNull().default(''),
+    // Optional link to a Compendium Location (see `locations` below).
+    linkedLocationId: text('linked_location_id'),
     updatedAt: text('updated_at').notNull().default(now),
   },
   (t) => ({
@@ -113,6 +115,7 @@ export const journeys = sqliteTable('journeys', {
   roles: text('roles').notNull().default('{}'), // JSON snapshot at journey start
   summary: text('summary').notNull().default('{}'), // JSON end-of-journey maths
   notes: text('notes').notNull().default(''), // whole-journey free text
+  mapSnapshot: text('map_snapshot').notNull().default(''), // PNG data URL of the travelled route
   createdAt: text('created_at').notNull().default(now),
   endedAt: text('ended_at'),
 });
@@ -171,6 +174,116 @@ export const rolls = sqliteTable(
     createdAt: text('created_at').notNull().default(now),
   },
   (t) => ({ byJourney: index('rolls_journey_idx').on(t.journeyId) }),
+);
+
+/* --- Compendium -------------------------------------------------------------
+ * The campaign's shared reference shelf. One table per section rather than a
+ * single polymorphic table, because the sections have genuinely different
+ * columns — and adding `npcs` / `bestiary` later is then just another table
+ * plus a row in shared/compendium.js's COMPENDIUM_SECTIONS.
+ *
+ * `source` is 'core' for seeded rulebook entries and 'custom' for home-brew;
+ * re-seeding only ever touches 'core' rows.
+ */
+
+export const virtues = sqliteTable('virtues', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''),
+  effect: text('effect').notNull().default(''),
+  source: text('source').notNull().default('custom'), // core | custom
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+export const rewardDefinitions = sqliteTable('reward_definitions', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''),
+  code: text('code').notNull().default(''), // F / G / K / CF / CM / RI
+  appliesTo: text('applies_to').notNull().default('[]'), // JSON ['weapon','armour','shield']
+  summary: text('summary').notNull().default(''),
+  tiers: text('tiers').notNull().default('[]'), // JSON [{value,label}] incl. enhanced tiers
+  source: text('source').notNull().default('custom'),
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+/** Weapons, armour and shields a character sheet can pick from. */
+export const itemsCatalogue = sqliteTable('items_catalogue', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull().default('weapon'), // weapon | armour | shield
+  name: text('name').notNull().default(''),
+  type: text('type').notNull().default(''),
+  proficiency: text('proficiency').notNull().default(''),
+  damage: integer('damage').notNull().default(0),
+  injury: integer('injury').notNull().default(0),
+  // Second Injury rating for the three weapons that have one per grip
+  // (Long Sword / Spear / Long-hafted Axe). 0 = a single Injury, as usual.
+  injuryTwoHanded: integer('injury_two_handed').notNull().default(0),
+  protection: integer('protection').notNull().default(0),
+  parry: integer('parry').notNull().default(0),
+  load: integer('load').notNull().default(0),
+  // Minimum Standard of Living. Compendium-only, and only ever a soft hint on
+  // the character sheet's pickers — nothing is blocked by it.
+  minStandard: text('min_standard').notNull().default(''),
+  notes: text('notes').notNull().default(''),
+  source: text('source').notNull().default('custom'),
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+/**
+ * Cultural Virtues — a separate table from `virtues` (the culture-agnostic
+ * core six) because they carry a Culture and are retrieved by it: a hero is
+ * offered the Virtues of their own culture, not the whole list.
+ */
+export const culturalVirtues = sqliteTable('cultural_virtues', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''),
+  description: text('description').notNull().default(''),
+  culture: text('culture').notNull().default(''),
+  source: text('source').notNull().default('custom'), // core | custom
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+export const locations = sqliteTable('locations', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''),
+  years: text('years').notNull().default('[]'), // JSON string[] of years visited
+  keyInfo: text('key_info').notNull().default(''),
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+/**
+ * Handouts — an image plus notes, tagged to a campaign Year + Season.
+ *
+ * `hidden` defaults to TRUE: a handout is GM prep until the GM reveals it, and
+ * the reveal is reversible in both directions. Hidden-ness is enforced on the
+ * server (list, read and image routes all filter on it for players), not just
+ * by not drawing it in the UI.
+ *
+ * Image handling mirrors map_calibrations: `originalFile` is on-disk only and
+ * never served, `tiers` are the generated WebP derivatives, and those are the
+ * only bytes a browser ever gets.
+ */
+export const handouts = sqliteTable(
+  'handouts',
+  {
+    id: text('id').primaryKey(),
+    title: text('title').notNull().default(''),
+    notes: text('notes').notNull().default(''),
+    year: integer('year').notNull().default(0),
+    season: text('season').notNull().default('Spring'),
+    hidden: integer('hidden', { mode: 'boolean' }).notNull().default(true),
+    originalFile: text('original_file').notNull().default(''),
+    imageWidth: integer('image_width').notNull().default(0),
+    imageHeight: integer('image_height').notNull().default(0),
+    tiers: text('tiers').notNull().default('[]'), // JSON [{name,width,height,file,bytes}]
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => ({ byWhen: index('handouts_year_season_idx').on(t.year, t.season) }),
 );
 
 /** The in-progress travel sequence state machine (spec §6d). */

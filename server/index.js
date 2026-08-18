@@ -40,7 +40,7 @@ app.use('/api', apiRoutes);
 
 // NOTE: uploads/ is deliberately NOT served statically. Map pixels only ever
 // leave through /api/map/calibrations/:id/image/:tier, which can only read from
-// uploads/derivatives — the ~29MB original is unreachable over HTTP.
+// uploads/derivatives — the multi-MB original is unreachable over HTTP.
 
 // Production build (Railway, later): serve the built client.
 if (fs.existsSync(paths.clientDist)) {

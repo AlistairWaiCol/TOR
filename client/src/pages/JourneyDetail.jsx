@@ -2,15 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { regionLabel, roleLabel } from '@shared/journey.js';
 import { api } from '../lib/api.js';
+import { renderJourneyMap } from '../lib/journeyMap.js';
+import { useApp } from '../state/AppContext.jsx';
 import DiceResult from '../components/DiceResult.jsx';
 
 export default function JourneyDetail() {
   const { id } = useParams();
+  const { calibration } = useApp();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [notes, setNotes] = useState('');
   const [eventNotes, setEventNotes] = useState({});
   const [status, setStatus] = useState('');
+  const [drawing, setDrawing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -32,7 +36,31 @@ export default function JourneyDetail() {
     setTimeout(() => setStatus(''), 1500);
   };
 
-  if (error) return <div className="error-box">{error}</div>;
+  /**
+   * Journeys are snapshotted when the GM closes them out. This redraws one for
+   * a journey that predates the feature, or after the map has been re-tagged.
+   */
+  const drawMap = async () => {
+    setDrawing(true);
+    setError('');
+    try {
+      const dataUrl = await renderJourneyMap({
+        calibration,
+        journey: data.journey,
+        events: data.events,
+      });
+      if (!dataUrl) throw new Error('Nothing to draw — no calibrated map, or no hexes travelled.');
+      await api.patch(`/journeys/${data.journey.id}`, { mapSnapshot: dataUrl });
+      await load();
+      flash('Map drawn.');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDrawing(false);
+    }
+  };
+
+  if (error && !data) return <div className="error-box">{error}</div>;
   if (!data) return <p className="muted">Loading…</p>;
 
   const { journey, events, rolls, characters } = data;
@@ -58,6 +86,7 @@ export default function JourneyDetail() {
       </div>
 
       {status ? <div className="info-box">{status}</div> : null}
+      {error ? <div className="error-box">{error}</div> : null}
 
       <div className="panel">
         <div className="row">
@@ -81,6 +110,34 @@ export default function JourneyDetail() {
             .map(([cid, r]) => `${nameOf(cid)} — ${roleLabel(r)}`)
             .join(', ') || '—'}
         </p>
+      </div>
+
+      <div className="panel">
+        <div className="page-head" style={{ marginBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>Route</h2>
+          <button className="small" onClick={drawMap} disabled={drawing || !calibration}>
+            {drawing ? 'Drawing…' : journey.mapSnapshot ? 'Redraw map' : 'Draw map'}
+          </button>
+        </div>
+        {journey.mapSnapshot ? (
+          <>
+            <img
+              src={journey.mapSnapshot}
+              alt={`Route from ${journey.fromLabel || journey.fromHex} to ${journey.toLabel || journey.toHex}`}
+              style={{ maxWidth: '100%', borderRadius: 4, display: 'block' }}
+            />
+            <p className="small muted" style={{ marginBottom: 0 }}>
+              Travelled hexes highlighted; numbered pins match the events below (green = the
+              targeted hero succeeded, red = failed). Marching Tests are not pinned.
+            </p>
+          </>
+        ) : (
+          <p className="small muted" style={{ marginBottom: 0 }}>
+            {calibration
+              ? 'No map snapshot for this journey — press Draw map to make one from the current map.'
+              : 'No calibrated map available, so no route map can be drawn.'}
+          </p>
+        )}
       </div>
 
       {days ? (

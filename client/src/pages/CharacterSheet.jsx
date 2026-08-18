@@ -4,13 +4,28 @@ import {
   ATTRIBUTES,
   PROFICIENCY_GROUPS,
   STANCES,
+  computeWeary,
+  effectiveLoad,
   emptyArmour,
   emptyUsefulItem,
   emptyWeapon,
+  stanceAttackDice,
+  stanceAttackNote,
+  stanceAttackWarning,
   totalLoad,
   totalParry,
   totalProtection,
 } from '@shared/character.js';
+import { isCharacterTravelling } from '@shared/journey.js';
+import {
+  WEAPON_GRIPS,
+  catalogueItemToArmour,
+  catalogueItemToShield,
+  catalogueItemToWeapon,
+  isVersatileWeapon,
+  standardOfLivingWarning,
+} from '@shared/compendium.js';
+import { culturalVirtuesFor } from '@shared/culturalVirtues.js';
 import { computeTargetNumber } from '@shared/dice.js';
 import { ARMOUR_QUALITIES, SHIELD_QUALITIES, WEAPON_QUALITIES, effectiveWeapon } from '@shared/rewards.js';
 import { api } from '../lib/api.js';
@@ -26,6 +41,76 @@ import {
   TextField,
 } from '../components/Fields.jsx';
 
+/**
+ * A "pick one from the Compendium" dropdown that resets to its placeholder
+ * after each pick. Every one of these sits next to the free-text or blank-row
+ * control it supplements — catalogued entries are a convenience, never the only
+ * way to put something on a sheet.
+ */
+function CataloguePicker({
+  label,
+  entries,
+  onPick,
+  empty = 'nothing catalogued yet',
+  // Optional per-entry annotation appended to the option text, e.g. the
+  // Minimum Standard of Living an item asks for, or a Virtue's culture.
+  annotate,
+}) {
+  if (!entries.length) {
+    return (
+      <span className="small muted" title="Add entries on the Compendium screen">
+        {label}: {empty}
+      </span>
+    );
+  }
+  return (
+    <select
+      value=""
+      title={`${label} — adds a filled-in entry you can then edit`}
+      onChange={(e) => {
+        const picked = entries.find((x) => x.id === e.target.value);
+        if (picked) onPick(picked);
+        e.target.value = '';
+      }}
+    >
+      <option value="">{label}</option>
+      {entries.map((x) => {
+        const note = annotate?.(x);
+        return (
+          <option key={x.id} value={x.id}>
+            {x.name}
+            {note ? ` — ${note}` : ''}
+          </option>
+        );
+      })}
+    </select>
+  );
+}
+
+/** Option annotation for gear: the Standard of Living it normally calls for. */
+function standardNote(item) {
+  return item.minStandard ? `needs ${item.minStandard}` : '';
+}
+
+/**
+ * A Standard-of-Living note after picking gear. Deliberately a soft warning
+ * shown *after* the item has already been added — this app says so and lets
+ * the table decide, the same line it takes on Rearward melee attacks and
+ * mounted travel over hard terrain.
+ */
+function GearHint({ hint, where, onDismiss }) {
+  if (!hint || hint.where !== where) return null;
+  return (
+    <div className="warn-box">
+      {hint.text} Added anyway — Minimum Standard of Living is a character-creation guideline here,
+      not a restriction.{' '}
+      <button className="small" onClick={onDismiss}>
+        dismiss
+      </button>
+    </div>
+  );
+}
+
 function setIn(obj, path, value) {
   if (path.length === 0) return value;
   const [head, ...rest] = path;
@@ -36,13 +121,25 @@ function setIn(obj, path, value) {
 
 export default function CharacterSheet() {
   const { id } = useParams();
-  const { campaign, characters, refresh } = useApp();
+  const { campaign, characters, travel, journey, refresh } = useApp();
   const { openRoll } = useRoll();
   const [character, setCharacter] = useState(null);
   const [sheet, setSheet] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  // The Compendium backs the Rewards / Virtues / gear pickers below. If it
+  // fails to load the sheet still works — every picker has a manual fallback.
+  const [compendium, setCompendium] = useState({
+    virtues: [],
+    culturalVirtues: [],
+    rewards: [],
+    items: [],
+  });
+  // Standard-of-Living hints from the gear pickers. A note, never a block.
+  // Scoped to the panel the pick happened in, so it appears once, next to the
+  // picker that raised it — { where: 'weapons' | 'armour', text }.
+  const [gearHint, setGearHint] = useState(null);
 
   const tnBase = campaign?.tnBase ?? 20;
 
@@ -60,6 +157,21 @@ export default function CharacterSheet() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const blank = { virtues: [], culturalVirtues: [], rewards: [], items: [] };
+    api
+      .get('/compendium')
+      .then((d) =>
+        setCompendium({
+          virtues: d.virtues ?? [],
+          culturalVirtues: d.culturalVirtues ?? [],
+          rewards: d.rewards ?? [],
+          items: d.items ?? [],
+        }),
+      )
+      .catch(() => setCompendium(blank));
+  }, []);
 
   const update = (path, value) => {
     setSheet((s) => setIn(s, path, value));
@@ -103,20 +215,98 @@ export default function CharacterSheet() {
     [characters, id],
   );
 
+  const catalogue = useMemo(
+    () => ({
+      weapons: compendium.items.filter((i) => i.kind === 'weapon'),
+      armour: compendium.items.filter((i) => i.kind === 'armour'),
+      shields: compendium.items.filter((i) => i.kind === 'shield'),
+    }),
+    [compendium.items],
+  );
+
+  /**
+   * Cultural Virtues offered to this hero. `general.culture` is free text, so
+   * the match is case-insensitive and falls back to the whole list (labelled by
+   * culture) rather than showing an empty picker for a home-brew culture.
+   */
+  const culturalPicks = useMemo(() => {
+    const mine = culturalVirtuesFor(sheet?.general?.culture, compendium.culturalVirtues);
+    return mine.length
+      ? { entries: mine, matched: true }
+      : { entries: compendium.culturalVirtues, matched: false };
+  }, [compendium.culturalVirtues, sheet?.general?.culture]);
+
+  /** Append a Compendium entry's name + effect to one of the free-text boxes. */
+  const appendToTextBlock = (path, current, entry) => {
+    const detail = entry.effect || entry.summary || entry.description || '';
+    const line = `${entry.name}${detail ? ` — ${detail}` : ''}`;
+    const existing = String(current ?? '').trimEnd();
+    update(path, existing ? `${existing}\n${line}` : line);
+  };
+
+  /**
+   * Add a catalogued item to the sheet and, if it normally calls for a better
+   * Standard of Living than this hero has, say so. It still goes on the sheet —
+   * the rule is a guideline for character creation, not a lock on the gear.
+   */
+  const pickGear = (where, item, apply) => {
+    apply(item);
+    const text = standardOfLivingWarning(item, sheet?.general?.livingStandard);
+    setGearHint(text ? { where, text } : null);
+  };
+
   if (error && !sheet) return <div className="error-box">{error}</div>;
   if (!sheet) return <p className="muted">Loading sheet…</p>;
 
   const valour = sheet.rewards.valour;
   const protection = totalProtection(sheet);
   const parry = totalParry(sheet);
+  // Load and Weary are derived on every render, never stored — equip a weapon or
+  // change a quality tier and both update immediately.
   const load_ = totalLoad(sheet);
+  const travelling = isCharacterTravelling({ travel, journey, characterId: id });
+  const wearyLoad = effectiveLoad(sheet, { travelling });
+  const weary = computeWeary(sheet, { travelling });
+  const strengthTN = computeTargetNumber(sheet.attributes.strength.rating, tnBase);
+  const stanceDice = stanceAttackDice(sheet);
 
   const conditionFlags = {
-    weary: sheet.conditions.weary,
+    weary,
     miserable: sheet.conditions.miserable,
     inspired: sheet.conditions.inspired,
     hope: sheet.attributes.heart.hope,
     whisperTargets: otherNames,
+  };
+
+  /**
+   * Every attack roll on this sheet, from either the weapon table or the
+   * proficiency list. The TN is the hero's STRENGTH TN plus the target's Parry
+   * (typed into the dialog), and the Combat Stance adjusts the dice pool.
+   */
+  const rollAttack = ({ weapon = null, proficiency, title, label, extraNote = '' }) => {
+    const group = proficiency || weapon?.proficiency || 'Swords';
+    const p = sheet.combat.proficiencies[group] ?? { rating: 0, favoured: false };
+    rollWith({
+      title,
+      characterId: id,
+      skill: group,
+      kind: 'attack',
+      label,
+      rating: p.rating,
+      // Parry mode: the dialog asks for the target's Parry and adds it to this.
+      parryTarget: true,
+      strengthTN,
+      targetParry: 0,
+      extraDice: stanceDice,
+      favoured: p.favoured || sheet.conditions.favourState === 'Favoured',
+      illFavoured: sheet.conditions.favourState === 'Ill-Favoured',
+      bonus: sheet.combat.attackModifier,
+      note:
+        `TN = your STRENGTH TN (${strengthTN}) + the target's Parry. ${stanceAttackNote(sheet)}` +
+        (extraNote ? ` ${extraNote}` : ''),
+      warning: stanceAttackWarning(sheet, weapon ?? { proficiency: group }),
+      ...conditionFlags,
+    });
   };
 
   const rollSkill = (attrKey, skillName) => {
@@ -198,13 +388,21 @@ export default function CharacterSheet() {
               <NumField value={sheet.rewards.valour} onChange={(v) => update(['rewards', 'valour'], v)} min={0} />
             </div>
           </div>
+          <div className="row" style={{ marginBottom: 6 }}>
+            <CataloguePicker
+              label="+ from Compendium"
+              entries={compendium.rewards}
+              onPick={(r) => appendToTextBlock(['rewards', 'rewardTraits'], sheet.rewards.rewardTraits, r)}
+            />
+          </div>
           <AreaField
             label="Earned Reward traits (with effect)"
             value={sheet.rewards.rewardTraits}
             onChange={(v) => update(['rewards', 'rewardTraits'], v)}
           />
           <p className="small muted" style={{ marginBottom: 0 }}>
-            Valour also feeds the enhanced Close-fitting / Cunning Make tiers below.
+            Pick from the Compendium or just type — home-brew Rewards are fine. Valour also feeds the
+            enhanced Close-fitting / Cunning Make tiers below.
           </p>
         </div>
 
@@ -220,13 +418,33 @@ export default function CharacterSheet() {
               <NumField value={sheet.virtues.wisdom} onChange={(v) => update(['virtues', 'wisdom'], v)} min={0} />
             </div>
           </div>
+          <div className="row" style={{ marginBottom: 6 }}>
+            <CataloguePicker
+              label="+ general"
+              entries={compendium.virtues}
+              onPick={(v) => appendToTextBlock(['virtues', 'virtueList'], sheet.virtues.virtueList, v)}
+            />
+            <CataloguePicker
+              label={culturalPicks.matched ? `+ ${sheet.general.culture}` : '+ cultural'}
+              entries={culturalPicks.entries}
+              empty="no Cultural Virtues catalogued"
+              // When the hero's Culture matches a catalogued one the list is
+              // narrowed to it; otherwise every culture is offered, labelled.
+              annotate={culturalPicks.matched ? undefined : (v) => v.culture}
+              onPick={(v) => appendToTextBlock(['virtues', 'virtueList'], sheet.virtues.virtueList, v)}
+            />
+          </div>
           <AreaField
             label="Virtues (e.g. Hardiness)"
             value={sheet.virtues.virtueList}
             onChange={(v) => update(['virtues', 'virtueList'], v)}
           />
           <p className="small muted" style={{ marginBottom: 0 }}>
-            Text only in v1 — numeric effects are not auto-applied.
+            Pick from the Compendium or type your own. Text only — numeric effects are not
+            auto-applied.{' '}
+            {culturalPicks.matched
+              ? `Cultural Virtues are filtered to ${sheet.general.culture}.`
+              : 'Set a Culture above to filter the Cultural Virtues to it.'}
           </p>
         </div>
 
@@ -239,12 +457,13 @@ export default function CharacterSheet() {
             options={['Normal', 'Favoured', 'Ill-Favoured']}
           />
           <div className="row" style={{ marginBottom: 8 }}>
-            <CheckField
-              label="Weary"
-              title="Outlined Success Dice (1-3) count as 0"
-              checked={sheet.conditions.weary}
-              onChange={(v) => update(['conditions', 'weary'], v)}
-            />
+            <label
+              className="check"
+              title={`Computed: Endurance ${sheet.attributes.strength.endurance} ${weary ? '≤' : '>'} effective Load ${wearyLoad}. Outlined Success Dice (1-3) count as 0 while Weary.`}
+            >
+              <input type="checkbox" checked={weary} readOnly disabled />
+              Weary
+            </label>
             <CheckField
               label="Miserable"
               title="An Eye of Sauron is an automatic failure"
@@ -263,6 +482,11 @@ export default function CharacterSheet() {
               onChange={(v) => update(['conditions', 'inspired'], v)}
             />
           </div>
+          <p className="small muted" style={{ marginTop: 0 }}>
+            Weary is computed: Endurance ({sheet.attributes.strength.endurance}) ≤ Load ({load_}
+            {travelling ? ` + ${sheet.attributes.strength.fatigue} Fatigue while travelling = ${wearyLoad}` : ''}).
+            Miserable and Wounded stay manual.
+          </p>
           <TextField label="Injury" value={sheet.conditions.injury} onChange={(v) => update(['conditions', 'injury'], v)} />
         </div>
       </div>
@@ -274,14 +498,19 @@ export default function CharacterSheet() {
           const tn = computeTargetNumber(a.rating, tnBase);
           return (
             <div className="panel" key={attr.key}>
-              <div className="page-head" style={{ marginBottom: 8 }}>
-                <h2 style={{ margin: 0 }}>{attr.label}</h2>
-                <span className="pill gold" title={`${tnBase} − ${a.rating}`}>
-                  TN {tn}
-                </span>
-              </div>
-              <div style={{ width: 96, marginBottom: 10 }}>
+              <h2 style={{ margin: '0 0 8px' }}>{attr.label}</h2>
+              {/* Rating and Target Number are the two headline numbers of an
+                  Attribute, so the TN gets a real stat box beside the Rating
+                  rather than a pill tucked into the heading. */}
+              <div className="pool-grid" style={{ marginBottom: 10 }}>
                 <NumField label="Rating" value={a.rating} onChange={(v) => update(['attributes', attr.key, 'rating'], v)} min={0} />
+                <label
+                  className="field"
+                  title={`Target Number = ${tnBase} − ${attr.label} rating (${a.rating}). Computed, not editable.`}
+                >
+                  <span>Target No.</span>
+                  <input type="number" value={tn} readOnly disabled />
+                </label>
               </div>
 
               <div className="pool-grid" style={{ marginBottom: 12 }}>
@@ -289,7 +518,13 @@ export default function CharacterSheet() {
                   <>
                     <NumField label="Endurance" value={a.endurance} onChange={(v) => update(['attributes', 'strength', 'endurance'], v)} />
                     <NumField label="Max" value={a.enduranceMax} onChange={(v) => update(['attributes', 'strength', 'enduranceMax'], v)} />
-                    <NumField label="Load" value={a.load} onChange={(v) => update(['attributes', 'strength', 'load'], v)} />
+                    <label
+                      className="field"
+                      title="Computed from equipped weapons, armour and shield (after Cunning Make) plus Treasure."
+                    >
+                      <span>Load</span>
+                      <input type="number" value={load_} readOnly disabled />
+                    </label>
                     <NumField label="Treasure" value={a.treasure} onChange={(v) => update(['attributes', 'strength', 'treasure'], v)} />
                     <NumField label="Fatigue" value={a.fatigue} onChange={(v) => update(['attributes', 'strength', 'fatigue'], v)} />
                   </>
@@ -312,6 +547,17 @@ export default function CharacterSheet() {
                   </>
                 ) : null}
               </div>
+              {attr.key === 'strength' ? (
+                <p className="small">
+                  <span className="pill gold">Load {load_}</span>{' '}
+                  {weary ? <span className="pill bad">Weary</span> : null}{' '}
+                  <span className="muted">
+                    Load is computed from equipped gear (after Cunning Make) plus Treasure, and Weary
+                    follows from Endurance ≤ Load
+                    {travelling ? ' + Fatigue while travelling' : ''}.
+                  </span>
+                </p>
+              ) : null}
               {attr.key === 'wits' ? (
                 <p className="small">
                   <span className="pill gold">Total Parry {parry}</span>{' '}
@@ -460,7 +706,31 @@ export default function CharacterSheet() {
       <div className="panel">
         <h2>Combat</h2>
         <div className="grid g3" style={{ marginBottom: 12 }}>
-          <SelectField label="Stance" value={sheet.combat.stance} onChange={(v) => update(['combat', 'stance'], v)} options={STANCES} />
+          <div>
+            <div className="row" style={{ alignItems: 'flex-end' }}>
+              <div style={{ flex: 1, minWidth: 120 }}>
+                <SelectField
+                  label="Stance"
+                  value={sheet.combat.stance}
+                  onChange={(v) => update(['combat', 'stance'], v)}
+                  options={STANCES}
+                />
+              </div>
+              <div style={{ width: 96 }}>
+                <NumField
+                  label="# engaging"
+                  title="Opponents currently engaging this hero — Defensive stance costs 1 Success Die each"
+                  value={sheet.combat.opponentsEngaging}
+                  onChange={(v) => update(['combat', 'opponentsEngaging'], v)}
+                  min={0}
+                />
+              </div>
+            </div>
+            <p className="small muted" style={{ margin: '4px 0 0' }}>
+              {stanceAttackNote(sheet)}
+              {stanceDice ? ` Attack rolls get ${stanceDice > 0 ? '+' : ''}${stanceDice}d.` : ''}
+            </p>
+          </div>
           <NumField label="Attack Modifier" value={sheet.combat.attackModifier} onChange={(v) => update(['combat', 'attackModifier'], v)} />
           <div>
             <label className="field">
@@ -494,19 +764,10 @@ export default function CharacterSheet() {
                 <RollButton
                   title={`Attack roll with ${group}`}
                   onClick={() =>
-                    rollWith({
+                    rollAttack({
+                      proficiency: group,
                       title: `${group} attack roll`,
-                      characterId: id,
-                      skill: group,
-                      kind: 'attack',
                       label: `${group} attack`,
-                      rating: p.rating,
-                      targetNumber: computeTargetNumber(sheet.attributes.strength.rating, tnBase),
-                      favoured: p.favoured || sheet.conditions.favourState === 'Favoured',
-                      illFavoured: sheet.conditions.favourState === 'Ill-Favoured',
-                      bonus: sheet.combat.attackModifier,
-                      note: 'In TOR 2e the TN of an attack is set by the target — usually the foe\'s Parry. Adjust the Target Number before rolling.',
-                      ...conditionFlags,
                     })
                   }
                 />
@@ -522,10 +783,23 @@ export default function CharacterSheet() {
       <div className="panel">
         <div className="page-head" style={{ marginBottom: 8 }}>
           <h2 style={{ margin: 0 }}>Weapons</h2>
-          <button className="small" onClick={() => update(['weapons'], [...sheet.weapons, emptyWeapon()])}>
-            + weapon
-          </button>
+          <div className="row">
+            <CataloguePicker
+              label="+ from catalogue"
+              entries={catalogue.weapons}
+              annotate={standardNote}
+              onPick={(item) =>
+                pickGear('weapons', item, (it) =>
+                  update(['weapons'], [...sheet.weapons, { ...emptyWeapon(), ...catalogueItemToWeapon(it) }]),
+                )
+              }
+            />
+            <button className="small" onClick={() => update(['weapons'], [...sheet.weapons, emptyWeapon()])}>
+              + weapon
+            </button>
+          </div>
         </div>
+        <GearHint hint={gearHint} where="weapons" onDismiss={() => setGearHint(null)} />
         <div className="table-scroll">
           <table>
             <thead>
@@ -533,10 +807,14 @@ export default function CharacterSheet() {
                 <th>Atk</th>
                 <th>Dmg</th>
                 <th>Eq</th>
+                <th>Name</th>
                 <th>Type</th>
                 <th>Prof.</th>
                 <th>Damage</th>
                 <th>Injury</th>
+                <th title="Long Sword, Spear and Long-hafted Axe have one Injury rating per grip. Damage is the same either way.">
+                  Grip
+                </th>
                 <th>Load</th>
                 <th title="Fell — +2 Injury">F</th>
                 <th title="Grievous — +1 Damage">G</th>
@@ -554,21 +832,11 @@ export default function CharacterSheet() {
                       <RollButton
                         title="Attack roll"
                         onClick={() =>
-                          rollWith({
-                            title: `Attack — ${w.type || 'weapon'}`,
-                            characterId: id,
-                            skill: w.proficiency || 'Swords',
-                            kind: 'attack',
-                            label: `${w.type || 'weapon'} attack`,
-                            rating: sheet.combat.proficiencies[w.proficiency || 'Swords']?.rating ?? 0,
-                            targetNumber: computeTargetNumber(sheet.attributes.strength.rating, tnBase),
-                            favoured:
-                              sheet.combat.proficiencies[w.proficiency || 'Swords']?.favoured ||
-                              sheet.conditions.favourState === 'Favoured',
-                            illFavoured: sheet.conditions.favourState === 'Ill-Favoured',
-                            bonus: sheet.combat.attackModifier,
-                            note: `Piercing Blow on a Feat Die of ${eff.piercingThreshold}+. The attack TN is set by the target's Parry — adjust it below.`,
-                            ...conditionFlags,
+                          rollAttack({
+                            weapon: w,
+                            title: `Attack — ${w.name || w.type || 'weapon'}`,
+                            label: `${w.name || w.type || 'weapon'} attack`,
+                            extraNote: `Piercing Blow on a Feat Die of ${eff.piercingThreshold}+.`,
                           })
                         }
                       />
@@ -579,9 +847,13 @@ export default function CharacterSheet() {
                         title="Damage / Injury readout"
                         onClick={() =>
                           window.alert(
-                            `${w.type || 'Weapon'}\n` +
+                            `${w.name || w.type || 'Weapon'}\n` +
                               `Damage ${eff.damage}${eff.bonuses.damage ? ` (base ${w.damage} +${eff.bonuses.damage} Grievous)` : ''}\n` +
-                              `Injury ${eff.injury}${eff.bonuses.injury ? ` (base ${w.injury} +${eff.bonuses.injury} Fell)` : ''}\n` +
+                              `Injury ${eff.injury}${eff.bonuses.injury ? ` (base ${eff.baseInjury} +${eff.bonuses.injury} Fell)` : ''}` +
+                              (isVersatileWeapon(w)
+                                ? ` — held ${w.grip === '2h' ? 'two-handed' : 'one-handed'} (${w.injury} / ${w.injuryTwoHanded})`
+                                : '') +
+                              '\n' +
                               `Piercing Blow on Feat Die ${eff.piercingThreshold}+\n` +
                               (sheet.combat.stanceDamageEnabled ? `Stance damage +${sheet.combat.stanceDamage}\n` : '') +
                               `\nDamage is a static value in TOR 2e, not a dice roll.`,
@@ -593,6 +865,9 @@ export default function CharacterSheet() {
                     </td>
                     <td>
                       <input type="checkbox" checked={w.equipped} onChange={(e) => update(['weapons', i, 'equipped'], e.target.checked)} />
+                    </td>
+                    <td>
+                      <input value={w.name} onChange={(e) => update(['weapons', i, 'name'], e.target.value)} style={{ minWidth: 110 }} />
                     </td>
                     <td>
                       <input value={w.type} onChange={(e) => update(['weapons', i, 'type'], e.target.value)} style={{ minWidth: 96 }} />
@@ -613,7 +888,37 @@ export default function CharacterSheet() {
                     </td>
                     <td>
                       <input type="number" value={w.injury} onChange={(e) => update(['weapons', i, 'injury'], Number(e.target.value))} style={{ width: 58 }} />
-                      {eff.bonuses.injury ? <div className="small muted">→ {eff.injury}</div> : null}
+                      {/* The effective Injury differs from the typed one-handed
+                          value once Fell applies, or once a two-handed grip is
+                          selected on a weapon that has a rating for each. */}
+                      {eff.injury !== (Number(w.injury) || 0) ? (
+                        <div className="small muted">→ {eff.injury}</div>
+                      ) : null}
+                    </td>
+                    <td>
+                      {isVersatileWeapon(w) ? (
+                        <>
+                          <select
+                            value={w.grip || '1h'}
+                            onChange={(e) => update(['weapons', i, 'grip'], e.target.value)}
+                            style={{ minWidth: 86 }}
+                            title={`Injury ${w.injury} one-handed, ${w.injuryTwoHanded} two-handed.`}
+                          >
+                            {WEAPON_GRIPS.map((g) => (
+                              <option key={g.value} value={g.value}>
+                                {g.label}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="small muted">
+                            {w.injury} / {w.injuryTwoHanded}
+                          </div>
+                        </>
+                      ) : (
+                        <span className="small muted" title="This weapon has a single Injury rating.">
+                          —
+                        </span>
+                      )}
                     </td>
                     <td>
                       <input type="number" value={w.load} onChange={(e) => update(['weapons', i, 'load'], Number(e.target.value))} style={{ width: 58 }} />
@@ -653,10 +958,37 @@ export default function CharacterSheet() {
       <div className="panel">
         <div className="page-head" style={{ marginBottom: 8 }}>
           <h2 style={{ margin: 0 }}>Armour &amp; Shield</h2>
-          <button className="small" onClick={() => update(['armour'], [...sheet.armour, emptyArmour()])}>
-            + armour
-          </button>
+          <div className="row">
+            <CataloguePicker
+              label="+ armour from catalogue"
+              entries={catalogue.armour}
+              annotate={standardNote}
+              onPick={(item) =>
+                pickGear('armour', item, (it) =>
+                  update(['armour'], [...sheet.armour, { ...emptyArmour(), ...catalogueItemToArmour(it) }]),
+                )
+              }
+            />
+            <CataloguePicker
+              label="set shield from catalogue"
+              entries={catalogue.shields}
+              annotate={standardNote}
+              onPick={(item) =>
+                pickGear('armour', item, (it) =>
+                  update(['shield'], {
+                    ...sheet.shield,
+                    ...catalogueItemToShield(it),
+                    equipped: sheet.shield.equipped,
+                  }),
+                )
+              }
+            />
+            <button className="small" onClick={() => update(['armour'], [...sheet.armour, emptyArmour()])}>
+              + armour
+            </button>
+          </div>
         </div>
+        <GearHint hint={gearHint} where="armour" onDismiss={() => setGearHint(null)} />
         <div className="table-scroll">
           <table>
             <thead>
@@ -771,8 +1103,13 @@ export default function CharacterSheet() {
             {protection.bonus ? ` +${protection.bonus} CF` : ''}
           </span>
           <span className="pill">Total Parry {parry}</span>
-          <span className="pill">Equipped Load {load_}</span>
-          <span className="pill">Stance {sheet.combat.stance}</span>
+          <span className="pill" title="Equipped gear after Cunning Make, plus Treasure">
+            Load {load_}
+          </span>
+          <span className="pill">
+            Stance {sheet.combat.stance}
+            {stanceDice ? ` (${stanceDice > 0 ? '+' : ''}${stanceDice}d attack)` : ''}
+          </span>
         </div>
       </div>
 

@@ -10,6 +10,7 @@ import {
   computeJourneyDays,
   lookupJourneyEvent,
   marchingTestDistance,
+  promptedRollFor,
   regionFeatMode,
   roleSkill,
   selectTargetRole,
@@ -235,12 +236,12 @@ describe('role assignment rules', () => {
 });
 
 describe('hex grid maths', () => {
-  it('uses the spec-measured defaults for northlands22.png', () => {
-    assert.equal(DEFAULT_CALIBRATION.hexEdge, 71);
-    assert.equal(DEFAULT_CALIBRATION.hexWidth, 142);
-    assert.equal(DEFAULT_CALIBRATION.hexHeight, 123);
-    assert.equal(DEFAULT_CALIBRATION.colSpacing, 106);
-    assert.equal(DEFAULT_CALIBRATION.colOffset, 62);
+  it("uses the spec-measured defaults for the Wilderland Adventurer's Map", () => {
+    assert.equal(DEFAULT_CALIBRATION.hexEdge, 70);
+    assert.equal(DEFAULT_CALIBRATION.hexWidth, 140);
+    assert.equal(DEFAULT_CALIBRATION.hexHeight, 121);
+    assert.equal(DEFAULT_CALIBRATION.colSpacing, 105);
+    assert.equal(DEFAULT_CALIBRATION.colOffset, 60);
     assert.equal(DEFAULT_CALIBRATION.orientation, 'flat-top');
     assert.equal(DEFAULT_CALIBRATION.layout, 'offset-columns');
   });
@@ -281,5 +282,80 @@ describe('hex grid maths', () => {
       }
       assert.equal(new Set(hexNeighbours(col, row).map((n) => `${n.col},${n.row}`)).size, 6);
     }
+  });
+});
+
+/* --- "your turn to roll" prompts -------------------------------------------- */
+
+describe('promptedRollFor', () => {
+  const GUIDE = 'guide-id';
+  const LOOKOUT = 'lookout-id';
+  const journey = { roles: { [GUIDE]: 'guide', [LOOKOUT]: 'lookout' }, routeIndex: 3 };
+
+  const marching = { phase: 'awaiting_marching_test', state: {} };
+  const resolving = {
+    phase: 'awaiting_resolution',
+    state: {
+      pendingEvent: {
+        eventId: 'evt-1',
+        roleKey: 'lookout',
+        skill: 'Awareness',
+        targetCharacterId: LOOKOUT,
+      },
+    },
+  };
+
+  it('asks nobody when no hero is selected in this browser', () => {
+    assert.equal(promptedRollFor({ travel: marching, journey, characterId: '' }), null);
+    assert.equal(promptedRollFor({}), null);
+  });
+
+  it('asks the Guide for the Marching Test, and only the Guide', () => {
+    const p = promptedRollFor({ travel: marching, journey, characterId: GUIDE });
+    assert.deepEqual(p, { kind: 'marching_test', roleKey: 'guide', skill: 'Travel' });
+    assert.equal(promptedRollFor({ travel: marching, journey, characterId: LOOKOUT }), null);
+    assert.equal(promptedRollFor({ travel: marching, journey, characterId: 'nobody' }), null);
+  });
+
+  it('asks the targeted hero to resolve their own event, and only them', () => {
+    const p = promptedRollFor({ travel: resolving, journey, characterId: LOOKOUT });
+    assert.deepEqual(p, {
+      kind: 'resolution',
+      roleKey: 'lookout',
+      skill: 'Awareness',
+      eventId: 'evt-1',
+    });
+    assert.equal(promptedRollFor({ travel: resolving, journey, characterId: GUIDE }), null);
+  });
+
+  it('falls back to the role\'s skill if the pending event carries none', () => {
+    const travel = {
+      phase: 'awaiting_resolution',
+      state: { pendingEvent: { roleKey: 'hunter', targetCharacterId: GUIDE } },
+    };
+    assert.equal(promptedRollFor({ travel, journey, characterId: GUIDE }).skill, 'Hunting');
+  });
+
+  it('stays quiet in every phase that is somebody else\'s move', () => {
+    for (const phase of [
+      'idle',
+      'complete',
+      'awaiting_target',
+      'awaiting_target_choice',
+      'awaiting_event_die',
+      'journey_end',
+      'awaiting_fatigue_relief',
+    ]) {
+      assert.equal(
+        promptedRollFor({ travel: { phase, state: {} }, journey, characterId: GUIDE }),
+        null,
+        `phase ${phase} should not prompt`,
+      );
+    }
+  });
+
+  it('stays quiet when the resolution step has no pending event yet', () => {
+    const travel = { phase: 'awaiting_resolution', state: {} };
+    assert.equal(promptedRollFor({ travel, journey, characterId: LOOKOUT }), null);
   });
 });

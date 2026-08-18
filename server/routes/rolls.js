@@ -2,7 +2,7 @@ import express from 'express';
 import { requireAuth, requireGM } from '../lib/auth.js';
 import { getRoll, recentRolls, updateRoll } from '../lib/store.js';
 import { performRoll } from '../lib/rollService.js';
-import { isConfigured, recentMessages } from '../lib/discord.js';
+import { formatMessage, isConfigured, postToDiscord, recentMessages } from '../lib/discord.js';
 import { SPECIAL_SUCCESS_OPTIONS } from '../../shared/dice.js';
 import { broadcast } from '../realtime.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
@@ -37,8 +37,26 @@ router.post(
 );
 
 /**
+ * Which picks are new since the last PATCH, as a multiset difference. The roll
+ * dialog saves on every dropdown change, so only the newly-spent icons are
+ * worth announcing — re-posting the whole list each time would spam the channel.
+ */
+function newlySpent(picks, already) {
+  const remaining = [...(already ?? [])];
+  const added = [];
+  for (const pick of picks) {
+    const at = remaining.indexOf(pick);
+    if (at >= 0) remaining.splice(at, 1);
+    else added.push(pick);
+  }
+  return added;
+}
+
+/**
  * Record Special Success icon spends as tags on the roll. Purely a record —
- * the narrative effects are not mechanically enforced (spec §7.9).
+ * the narrative effects are not mechanically enforced (spec §7.9) — but the
+ * choice is announced to Discord as a follow-up to the roll's own post, under
+ * the same whisper rule: a whispered roll's spends stay quiet too.
  */
 router.patch(
   '/:id',
@@ -64,8 +82,26 @@ router.patch(
     }
     if (req.body.note != null) patch.note = String(req.body.note);
     const roll = await updateRoll(req.params.id, patch);
+
+    let discord = null;
+    const added = patch.specialSuccesses
+      ? newlySpent(patch.specialSuccesses, existing.specialSuccesses)
+      : [];
+    if (added.length) {
+      const actor = roll.characterName || 'Someone';
+      const label = roll.label || roll.skill || 'that roll';
+      discord = await postToDiscord(
+        formatMessage(
+          '✨',
+          `${actor} spends ${added.length === 1 ? 'a success icon' : `${added.length} success icons`}` +
+            ` on ${label}: ${added.join(', ')}`,
+        ),
+        { whisperTo: roll.whisperTo },
+      );
+    }
+
     broadcast('roll:update', { roll });
-    return res.json({ roll });
+    return res.json({ roll, discord });
   }),
 );
 

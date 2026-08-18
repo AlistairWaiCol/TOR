@@ -1,12 +1,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { hexKey, hexPolygon, hexesInBounds, pixelToHex } from '@shared/hexMath.js';
 import { mapImageUrl } from '../lib/api.js';
+import partyPinUrl from '../assets/party-pin.png';
 
 const REGION_FILL = {
   border: 'rgba(95, 127, 158, 0.30)',
   wild: 'rgba(111, 154, 91, 0.24)',
   dark: 'rgba(138, 107, 156, 0.34)',
 };
+
+/**
+ * Party token. The artwork is trimmed to its own bounding box, so the pin's
+ * pointed tip IS the bottom edge of the file — anchoring is bottom-centre on
+ * the hex centre, the way a map pin points at a place.
+ *
+ * Height is a multiple of the hex height so the token scales with the grid at
+ * every zoom and derivative tier.
+ */
+const PIN_HEIGHT_IN_HEXES = 1.25;
+const PIN_ASPECT = 154 / 256; // width / height of the trimmed artwork
+
+/**
+ * Loaded once for the module rather than per <HexMap>: the Map page and the
+ * Calibration page both mount one, and it is a 22KB static asset either way.
+ */
+let pinImage = null;
+let pinPromise = null;
+
+function loadPartyPin() {
+  if (pinImage) return Promise.resolve(pinImage);
+  if (!pinPromise) {
+    pinPromise = new Promise((resolve) => {
+      const img = new Image();
+      img.src = partyPinUrl;
+      img.onload = () => {
+        pinImage = img;
+        resolve(img);
+      };
+      // Fall back to the plain gold dot rather than losing the party token.
+      img.onerror = () => resolve(null);
+    });
+  }
+  return pinPromise;
+}
 
 /**
  * Canvas map with a hex overlay. All calibration numbers are in the ORIGINAL
@@ -25,14 +61,17 @@ export default function HexMap({
   pinHex = null,
   selected = null,
   onHexClick,
+  onHexHover,
   paintable = false,
   height = '74vh',
 }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [image, setImage] = useState(null);
+  const [pin, setPin] = useState(pinImage);
   const [painting, setPainting] = useState(false);
   const lastPainted = useRef('');
+  const lastHovered = useRef('');
 
   const chosenTier = useMemo(() => {
     const tiers = calibration?.tiers ?? [];
@@ -53,6 +92,15 @@ export default function HexMap({
       alive = false;
     };
   }, [calibration?.id, chosenTier?.name]);
+
+  useEffect(() => {
+    if (pin) return undefined;
+    let alive = true;
+    loadPartyPin().then((img) => alive && img && setPin(img));
+    return () => {
+      alive = false;
+    };
+  }, [pin]);
 
   const hexIndex = useMemo(() => {
     const map = new Map();
@@ -216,16 +264,31 @@ export default function HexMap({
       const pts = hexPolygon(currentHex.col, currentHex.row, cal);
       const cx = (pts[0].x + pts[3].x) / 2;
       const cy = (pts[1].y + pts[4].y) / 2;
-      const r = Math.max(5, cal.hexHeight * 0.24);
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = '#c8a24a';
-      ctx.fill();
-      ctx.strokeStyle = '#191510';
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      if (pin) {
+        const ph = Math.max(18, cal.hexHeight * PIN_HEIGHT_IN_HEXES);
+        const pw = ph * PIN_ASPECT;
+        ctx.save();
+        // The pin is warm gold on warm-toned map art, so the shadow is doing
+        // real legibility work over light regions — not decoration.
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.62)';
+        ctx.shadowBlur = Math.max(3, ph * 0.09);
+        ctx.shadowOffsetY = Math.max(1, ph * 0.045);
+        // Bottom-centre anchor: the tip lands on the hex centre.
+        ctx.drawImage(pin, cx - pw / 2, cy - ph, pw, ph);
+        ctx.restore();
+      } else {
+        // Until the artwork loads (or if it fails), the original gold dot.
+        const r = Math.max(5, cal.hexHeight * 0.24);
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fillStyle = '#c8a24a';
+        ctx.fill();
+        ctx.strokeStyle = '#191510';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
     }
-  }, [calibration, chosenTier, image, zoom, showGrid, showTags, hexIndex, route, currentHex, pinHex, selected]);
+  }, [calibration, chosenTier, image, pin, zoom, showGrid, showTags, hexIndex, route, currentHex, pinHex, selected]);
 
   useEffect(() => {
     draw();
@@ -273,16 +336,28 @@ export default function HexMap({
           onHexClick?.(hx, e);
         }}
         onMouseMove={(e) => {
-          if (!painting) return;
           const hx = hexAtEvent(e);
           if (!hx) return;
           const key = hexKey(hx.col, hx.row);
+
+          // Hover is reported once per hex entered, so the caller can show a
+          // popover without re-rendering on every pixel of mouse movement.
+          if (onHexHover && key !== lastHovered.current) {
+            lastHovered.current = key;
+            onHexHover(hx, { clientX: e.clientX, clientY: e.clientY });
+          }
+
+          if (!painting) return;
           if (key === lastPainted.current) return;
           lastPainted.current = key;
           onHexClick?.(hx, e);
         }}
         onMouseUp={() => setPainting(false)}
-        onMouseLeave={() => setPainting(false)}
+        onMouseLeave={() => {
+          setPainting(false);
+          lastHovered.current = '';
+          onHexHover?.(null);
+        }}
       />
     </div>
   );

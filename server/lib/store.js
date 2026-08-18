@@ -6,18 +6,25 @@
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { hydrateSheet } from '../../shared/character.js';
+import { isCharacterTravelling } from '../../shared/journey.js';
 import { DEFAULT_CALIBRATION, hexKey } from '../../shared/hexMath.js';
 
 const {
   campaignState,
   characters,
+  culturalVirtues,
+  handouts,
   hexes,
+  itemsCatalogue,
   journeyEvents,
   journeys,
+  locations,
   mapCalibrations,
   partyState,
+  rewardDefinitions,
   rolls,
   travelState,
+  virtues,
 } = schema;
 
 export const SINGLETON = 'singleton';
@@ -268,6 +275,7 @@ export function defaultHex(col, row) {
     perilous: false,
     perilRating: 0,
     label: '',
+    linkedLocationId: null,
   };
 }
 
@@ -304,6 +312,7 @@ export async function upsertHex(calibrationId, { col, row, ...tags }) {
     perilous: Boolean(tags.perilous),
     perilRating: Number(tags.perilRating) || 0,
     label: tags.label ?? '',
+    linkedLocationId: tags.linkedLocationId || null,
     updatedAt: new Date().toISOString(),
   };
   if (existing[0]) {
@@ -376,6 +385,20 @@ export async function setTravelState({ journeyId, phase, state }) {
   return getTravelState();
 }
 
+/**
+ * Is this hero on the road right now? Answers the one question the Weary
+ * calculation needs from the travel state (Fatigue only counts towards Load
+ * while travelling). Lives here rather than in travelEngine.js because
+ * rollService.js needs it and travelEngine.js imports rollService.js.
+ */
+export async function characterIsTravelling(characterId) {
+  if (!characterId) return false;
+  const travel = await getTravelState();
+  if (!travel.journeyId) return false;
+  const journey = await getJourney(travel.journeyId);
+  return isCharacterTravelling({ travel, journey, characterId });
+}
+
 /* --- journeys --------------------------------------------------------------- */
 
 function toJourney(row) {
@@ -435,6 +458,7 @@ const JOURNEY_FIELDS = [
   'fromLabel',
   'toHex',
   'endedAt',
+  'mapSnapshot',
 ];
 
 export async function updateJourney(id, patch) {
@@ -540,6 +564,263 @@ export async function updateJourneyEvent(id, patch) {
 export async function nextEventSeq(journeyId) {
   const rows = await listJourneyEvents(journeyId);
   return rows.reduce((max, r) => Math.max(max, r.seq), 0) + 1;
+}
+
+/* --- compendium --------------------------------------------------------------
+ * Four sections with the same CRUD shape, described as data so the routes stay
+ * one generic handler and a fifth section (NPCs, Bestiary) is a table plus a
+ * row here.
+ */
+
+function toVirtue(row) {
+  return row ? { ...row } : null;
+}
+
+function toRewardDefinition(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    appliesTo: parseJson(row.appliesTo, []),
+    tiers: parseJson(row.tiers, []),
+  };
+}
+
+function toCatalogueItem(row) {
+  return row ? { ...row } : null;
+}
+
+function toLocation(row) {
+  if (!row) return null;
+  return { ...row, years: parseJson(row.years, []) };
+}
+
+const COMPENDIUM_TABLES = {
+  virtues: {
+    table: virtues,
+    hydrate: toVirtue,
+    order: (t) => asc(t.name),
+    fields: ['name', 'effect', 'source'],
+    defaults: { name: '', effect: '', source: 'custom' },
+  },
+  culturalVirtues: {
+    table: culturalVirtues,
+    hydrate: toVirtue,
+    // Grouped by Culture in the UI, so sort by Culture first.
+    order: (t) => asc(t.culture),
+    fields: ['name', 'description', 'culture', 'source'],
+    defaults: { name: '', description: '', culture: '', source: 'custom' },
+  },
+  rewards: {
+    table: rewardDefinitions,
+    hydrate: toRewardDefinition,
+    order: (t) => asc(t.name),
+    fields: ['name', 'code', 'summary', 'source'],
+    jsonFields: ['appliesTo', 'tiers'],
+    defaults: { name: '', code: '', summary: '', source: 'custom' },
+    jsonDefaults: { appliesTo: [], tiers: [] },
+  },
+  items: {
+    table: itemsCatalogue,
+    hydrate: toCatalogueItem,
+    order: (t) => asc(t.name),
+    fields: [
+      'kind',
+      'name',
+      'type',
+      'proficiency',
+      'damage',
+      'injury',
+      'injuryTwoHanded',
+      'protection',
+      'parry',
+      'load',
+      'minStandard',
+      'notes',
+      'source',
+    ],
+    numericFields: ['damage', 'injury', 'injuryTwoHanded', 'protection', 'parry', 'load'],
+    defaults: {
+      kind: 'weapon',
+      name: '',
+      type: '',
+      proficiency: '',
+      damage: 0,
+      injury: 0,
+      injuryTwoHanded: 0,
+      protection: 0,
+      parry: 0,
+      load: 0,
+      minStandard: '',
+      notes: '',
+      source: 'custom',
+    },
+  },
+  locations: {
+    table: locations,
+    hydrate: toLocation,
+    order: (t) => asc(t.name),
+    fields: ['name', 'keyInfo'],
+    jsonFields: ['years'],
+    defaults: { name: '', keyInfo: '' },
+    jsonDefaults: { years: [] },
+  },
+};
+
+export const COMPENDIUM_SECTION_KEYS = Object.keys(COMPENDIUM_TABLES);
+
+function sectionSpec(section) {
+  const spec = COMPENDIUM_TABLES[section];
+  if (!spec) throw Object.assign(new Error(`Unknown Compendium section: ${section}`), { status: 404 });
+  return spec;
+}
+
+/** Shape an incoming body into column values, dropping anything unrecognised. */
+function compendiumValues(spec, body, { partial = false } = {}) {
+  const values = {};
+  for (const field of spec.fields) {
+    if (field in body) {
+      const raw = body[field];
+      values[field] = spec.numericFields?.includes(field) ? Number(raw) || 0 : String(raw ?? '');
+    } else if (!partial) {
+      values[field] = spec.defaults[field];
+    }
+  }
+  for (const field of spec.jsonFields ?? []) {
+    if (field in body) values[field] = JSON.stringify(body[field] ?? spec.jsonDefaults[field]);
+    else if (!partial) values[field] = JSON.stringify(spec.jsonDefaults[field]);
+  }
+  return values;
+}
+
+export async function listCompendium(section) {
+  const spec = sectionSpec(section);
+  const rows = await db.select().from(spec.table).orderBy(spec.order(spec.table));
+  return rows.map(spec.hydrate);
+}
+
+export async function getCompendiumEntry(section, id) {
+  const spec = sectionSpec(section);
+  const rows = await db.select().from(spec.table).where(eq(spec.table.id, id));
+  return spec.hydrate(rows[0]);
+}
+
+export async function createCompendiumEntry(section, body = {}) {
+  const spec = sectionSpec(section);
+  const id = newId();
+  const nowIso = new Date().toISOString();
+  await db
+    .insert(spec.table)
+    .values({ id, ...compendiumValues(spec, body), createdAt: nowIso, updatedAt: nowIso });
+  return getCompendiumEntry(section, id);
+}
+
+export async function updateCompendiumEntry(section, id, body = {}) {
+  const spec = sectionSpec(section);
+  const existing = await getCompendiumEntry(section, id);
+  if (!existing) return null;
+  const values = compendiumValues(spec, body, { partial: true });
+  if (Object.keys(values).length === 0) return existing;
+  values.updatedAt = new Date().toISOString();
+  await db.update(spec.table).set(values).where(eq(spec.table.id, id));
+  return getCompendiumEntry(section, id);
+}
+
+export async function deleteCompendiumEntry(section, id) {
+  const spec = sectionSpec(section);
+  await db.delete(spec.table).where(eq(spec.table.id, id));
+  // A hex pointing at a deleted Location must not keep a dangling link.
+  if (section === 'locations') {
+    await db.update(hexes).set({ linkedLocationId: null }).where(eq(hexes.linkedLocationId, id));
+  }
+  return true;
+}
+
+/** Every section at once — what the Compendium page and the map both load. */
+export async function compendiumSnapshot() {
+  const entries = await Promise.all(COMPENDIUM_SECTION_KEYS.map((key) => listCompendium(key)));
+  return Object.fromEntries(COMPENDIUM_SECTION_KEYS.map((key, i) => [key, entries[i]]));
+}
+
+/* --- handouts ----------------------------------------------------------------
+ * `originalFile` is stripped from the client-facing shape, exactly as it is for
+ * map calibrations — the stored upload is never addressable over HTTP.
+ */
+
+function toHandout(row) {
+  if (!row) return null;
+  const { originalFile, ...rest } = row;
+  return { ...rest, tiers: parseJson(row.tiers, []) };
+}
+
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.includeHidden] GM only. Players never see hidden rows.
+ */
+export async function listHandouts({ includeHidden = false } = {}) {
+  const rows = includeHidden
+    ? await db.select().from(handouts)
+    : await db.select().from(handouts).where(eq(handouts.hidden, false));
+  // Newest first within a Year/Season; the page groups by Year/Season anyway.
+  return rows.map(toHandout).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+export async function getHandout(id) {
+  const rows = await db.select().from(handouts).where(eq(handouts.id, id));
+  return toHandout(rows[0]);
+}
+
+/** Includes `originalFile`, for deleting the upload off disk. */
+export async function getHandoutRow(id) {
+  const rows = await db.select().from(handouts).where(eq(handouts.id, id));
+  return rows[0] ? { ...rows[0], tiers: parseJson(rows[0].tiers, []) } : null;
+}
+
+export async function createHandout(values = {}) {
+  const id = newId();
+  const nowIso = new Date().toISOString();
+  await db.insert(handouts).values({
+    id,
+    title: values.title || '',
+    notes: values.notes || '',
+    year: Number(values.year) || 0,
+    season: values.season || 'Spring',
+    // A new handout is GM prep until it is explicitly revealed.
+    hidden: values.hidden === undefined ? true : Boolean(values.hidden),
+    originalFile: values.originalFile || '',
+    imageWidth: Number(values.imageWidth) || 0,
+    imageHeight: Number(values.imageHeight) || 0,
+    tiers: JSON.stringify(values.tiers || []),
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  });
+  return getHandout(id);
+}
+
+const HANDOUT_FIELDS = ['title', 'notes', 'year', 'season', 'hidden'];
+
+export async function updateHandout(id, patch = {}) {
+  const existing = await getHandout(id);
+  if (!existing) return null;
+  const values = {};
+  for (const key of HANDOUT_FIELDS) {
+    if (!(key in patch)) continue;
+    if (key === 'year') values.year = Number(patch.year) || 0;
+    else if (key === 'hidden') values.hidden = Boolean(patch.hidden);
+    else values[key] = String(patch[key] ?? '');
+  }
+  if ('tiers' in patch) values.tiers = JSON.stringify(patch.tiers ?? []);
+  if ('imageWidth' in patch) values.imageWidth = Number(patch.imageWidth) || 0;
+  if ('imageHeight' in patch) values.imageHeight = Number(patch.imageHeight) || 0;
+  if ('originalFile' in patch) values.originalFile = String(patch.originalFile ?? '');
+  if (Object.keys(values).length === 0) return existing;
+  values.updatedAt = new Date().toISOString();
+  await db.update(handouts).set(values).where(eq(handouts.id, id));
+  return getHandout(id);
+}
+
+export async function deleteHandout(id) {
+  await db.delete(handouts).where(eq(handouts.id, id));
+  return true;
 }
 
 /* --- rolls ------------------------------------------------------------------ */

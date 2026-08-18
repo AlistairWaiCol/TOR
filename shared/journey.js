@@ -22,6 +22,62 @@ export const TRAVEL_ROLES = [
 
 export const ROLE_KEYS = TRAVEL_ROLES.map((r) => r.key);
 
+/** Travel phases in which no journey is underway. Everything else is "in progress". */
+export const TERMINAL_TRAVEL_PHASES = ['idle', 'complete'];
+
+/**
+ * Is this hero actively travelling right now? Used by the Weary calculation,
+ * where Fatigue only counts on top of Load while on the road.
+ *
+ * "The Company" is the same set used for event Fatigue/Shadow/Hope: the heroes
+ * holding a travel role on this journey, falling back to everyone if nobody
+ * has been assigned a role.
+ */
+export function isCharacterTravelling({ travel, journey, characterId } = {}) {
+  if (!travel?.journeyId) return false;
+  if (TERMINAL_TRAVEL_PHASES.includes(travel.phase)) return false;
+  const roles = journey?.roles ?? {};
+  if (Object.keys(roles).length === 0) return true;
+  return Boolean(roles[characterId]);
+}
+
+/**
+ * Which roll, if any, the travel engine is currently waiting on from ONE named
+ * hero — the question the "your turn to roll" prompt asks.
+ *
+ * Reads only state that is already broadcast to every client: the travel
+ * phase, the pending event, and the journey's role snapshot. Returns null when
+ * it is nobody's turn, when it is somebody else's, or when no hero is selected.
+ *
+ * Pure, and here rather than in the component, so the branch table is testable.
+ */
+export function promptedRollFor({ travel, journey, characterId } = {}) {
+  if (!characterId) return null;
+  const phase = travel?.phase;
+  if (!phase || TERMINAL_TRAVEL_PHASES.includes(phase)) return null;
+
+  // Marching Test — the Guide's own TRAVEL roll.
+  if (phase === 'awaiting_marching_test') {
+    const roles = journey?.roles ?? {};
+    if (roles[characterId] !== 'guide') return null;
+    return { kind: 'marching_test', roleKey: 'guide', skill: roleSkill('guide') };
+  }
+
+  // Event Resolution step 3 — the targeted hero rolls for themselves.
+  if (phase === 'awaiting_resolution') {
+    const pending = travel?.state?.pendingEvent;
+    if (!pending || pending.targetCharacterId !== characterId) return null;
+    return {
+      kind: 'resolution',
+      roleKey: pending.roleKey,
+      skill: pending.skill || roleSkill(pending.roleKey),
+      eventId: pending.eventId ?? null,
+    };
+  }
+
+  return null;
+}
+
 /** Feat Die variant rolled to determine an event, by the event hex's region. */
 export function regionFeatMode(regionKey) {
   const region = REGION_TYPES.find((r) => r.key === regionKey);

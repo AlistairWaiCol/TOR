@@ -60,11 +60,12 @@ Make/Reinforced. Every roll icon goes through the one shared dice engine, with t
 Favoured/Ill-favoured selection and Weary/Miserable state applied automatically. No per-user
 ownership — anyone with the player passcode can edit any sheet.
 
-**Map calibration (GM)** — upload a map image, get three WebP resolution tiers generated
-server-side, and true up a flat-top offset-column hex grid with live sliders seeded to the measured
-values for `northlands22.png`. Per-hex tagging: Region type, and **independent** Hard Terrain and
-Road flags, optional Perilous Area with a Peril rating, optional label. Paint mode tags many hexes
-at once.
+**Map calibration (GM)** — upload a map image, get WebP derivatives generated server-side (a
+full-resolution tier that's re-encoded but never downscaled, so zoomed-in place names stay sharp,
+plus smaller `web`/`thumb` tiers for zoomed-out overview use), and true up a flat-top offset-column
+hex grid with live sliders seeded to the measured values for the Wilderland Adventurer's Map.
+Per-hex tagging: Region type, and **independent** Hard Terrain and Road flags, optional Perilous
+Area with a Peril rating, optional label. Paint mode tags many hexes at once.
 
 **Live shared map** — everyone sees the same party token and proposed route; any player can click
 hexes to draw a route and it updates for everyone over Socket.IO. GM can lock or clear it. Role
@@ -77,8 +78,24 @@ Journey. The GM presses Roll; the *targeted player* makes their own resolution r
 a short line to Discord and lands in the journey log.
 
 **Journey Log** — auto-populated per event (hex tags, target role and hero, Feat Die, event, roll
-outcome, consequence, Fatigue), with a free-text note per event and one for the whole journey.
-Exportable as Markdown or JSON. Kept entirely separate from any of your own campaign documents.
+outcome, consequence, Fatigue), with a free-text note per event and one for the whole journey, plus
+a route map cropped to the hexes actually travelled with a numbered pin per event. Exportable as
+Markdown or JSON. Kept entirely separate from any of your own campaign documents.
+
+**Compendium** — the campaign's shared reference shelf: **General Virtues** (the culture-agnostic
+core six), **Cultural Virtues** (60 entries across ten cultures, grouped by Culture), Rewards, a
+Weapons & Armour catalogue seeded with the core-rulebook gear tables, and Locations with the years
+visited and a free-text key-information field. Map hexes link to a Location, and the live map shows
+it on hover with a link into its entry. Character sheets pick Rewards, Virtues and gear from here —
+the Cultural Virtue picker narrows itself to the hero's own Culture — while still accepting
+home-brew entries typed in by hand.
+
+**Handouts** — an image plus notes, tagged to a campaign Year + Season. Players get a Year/Season
+selector that starts on the campaign's current date and is then free to browse back through earlier
+seasons. New handouts are **hidden** until the GM reveals them, and the GM can hide them again at any
+time; hidden ones are filtered out server-side, so a player's browser is never sent one. Uploads go
+through the same pipeline discipline as the map: re-encoded server-side into WebP, original never
+served.
 
 ---
 
@@ -88,21 +105,29 @@ Exportable as Markdown or JSON. Kept entirely separate from any of your own camp
 shared/          Game rules, imported by BOTH server and client — the single source of truth
   dice.js          The dice engine (§7). Pure, dependency-free, unit-tested.
   journey.js       Journey Events Table, Marching Test distance, day/Fatigue maths, role rules
-  character.js     The §5 sheet shape, skill lists, derived values
-  rewards.js       The six core Reward qualities (F/G/K/CF/CM/RI) and their effects
+  character.js     The §5 sheet shape, skill lists, derived values (Load, Weary, attack TN, stance)
+  rewards.js       The six core Reward qualities (F/G/K/CF/CM/RI) and their effects, grip Injury
+  compendium.js    Compendium sections, core Virtue/Reward/gear seed data, catalogue → sheet mapping
+  culturalVirtues.js  The 60 Cultural Virtues, by culture
   hexMath.js       Flat-top offset-column hex geometry and the calibration defaults
 server/
   config.js        Env + paths
   db/              Drizzle schema, connection, idempotent migration
   lib/             auth, store (repository layer), rollService, travelEngine, discord, images
-  routes/          auth, campaign, characters, map, party, travel, journeys, rolls
+  routes/          auth, campaign, characters, compendium, handouts, map, party, travel,
+                   journeys, rolls
   realtime.js      Socket.IO wiring + snapshot broadcasting
 client/src/        React (Vite): pages/, components/, state/AppContext.jsx
-tests/             dice.test.js, journey.test.js, integration.test.js
+                   assets/party-pin.png is the map's party token
+                   lib/journeyMap.js renders the Journey Log's route map on an offscreen canvas
+tests/             dice.test.js, journey.test.js, character.test.js, compendium.test.js,
+                   discord.test.js, integration.test.js
 scripts/seedMap.js Import the campaign map and build derivatives
+scripts/seedCompendium.js  Re-seed the core Virtues and Rewards (migrate() already does this)
 uploads/
   seed/            Original map images — never served over HTTP
-  derivatives/     Generated WebP tiers — the only map bytes a browser ever gets
+  originals/       Uploaded maps and handouts — never served over HTTP
+  derivatives/     Generated WebP tiers — the only map/handout bytes a browser ever gets
 ```
 
 ### The dice engine
@@ -139,9 +164,53 @@ Things the spec left open, and what was chosen:
   rather than faking dice.
 - **Parry has no roll button.** Parry is a static value that sets the TN attackers must beat. Total
   Parry is displayed; the Protection cluster gets the roll button, as the spec describes.
-- **Attack and Protection roll TNs are editable.** Both are set by something outside the sheet (the
-  foe's Parry; the blow that caused the Protection roll), and there's no bestiary in v1 — so the
-  dialog pre-fills a sensible number and says what actually sets it.
+- **An attack roll asks for the target's Parry, not a Target Number.** The TN of an attack is the
+  attacker's STRENGTH TN plus the target's Parry, so the dialog takes the Parry and does the sum
+  live. Targets are almost always NPCs with no sheet in this app, so it's a typed number rather than
+  a lookup. **Protection roll TNs stay editable** — that TN is set by the blow that caused the roll,
+  and there's no bestiary in v1.
+- **Stance modifiers apply to the hero's own outgoing attacks only.** Forward +1 Success Die, Open
+  no change, Defensive −1 per opponent engaging (a `# engaging` box next to the Stance selector, so
+  it's live), Rearward no dice modifier. NPC/incoming attacks are still out of scope. The dialog
+  pre-fills the modifier into the existing Situational-dice field, so the GM can still overrule it.
+- **A Rearward attack with a melee weapon warns rather than blocks.** RAW the stance is ranged-only,
+  but the app follows the same "say so, then let the table decide" line it takes on mounted travel
+  over hard terrain — the roll dialog shows a warning box and the roll still goes through.
+- **Load is computed, and includes Treasure.** Equipped weapons + armour + shield after Cunning Make,
+  plus `strength.treasure`. It's derived from the sheet on every render rather than stored, so
+  equipping a piece of gear or changing a quality tier updates it immediately with nothing stale to
+  go out of sync.
+- **Weary is computed: Endurance ≤ effective Load.** Effective Load is the computed Load, plus
+  current Fatigue *only while the hero is actively travelling* (§6 — Fatigue temporarily raises Load
+  on the road). That's a comparison-time adjustment; it never writes to the sheet. `computeWeary()`
+  in `shared/character.js` is the single implementation, called by the sheet to render the state and
+  by `performRoll()` so the dice engine rolls the same value. Miserable and Wounded remain manual.
+  Note the formula is `≤`, so a blank sheet (Endurance 0, Load 0) reads as Weary until an Endurance
+  is entered — that is the rule as written, not a bug.
+- **"Actively travelling" means a journey in a non-terminal phase.** Every phase except `idle` and
+  `complete` counts, including `journey_end` and `awaiting_fatigue_relief` — the Company is still
+  shedding road Fatigue at that point. Who counts is the same "The Company" rule used for event
+  Fatigue: the heroes holding a travel role, falling back to everyone if no roles are assigned.
+- **Special Success spends post a follow-up to Discord, not an edit.** `postToDiscord()` doesn't
+  capture the sent message's id (no `?wait=true`), so editing the original roll post isn't wired up.
+  A short follow-up line referencing the roll's label is enough for this app, and it respects the
+  same whisper rule — a whispered roll's spends stay quiet. Only *newly* spent icons are announced,
+  because the dialog saves on every dropdown change and re-posting the whole list would spam.
+- **Compendium writes need the player passcode, not the GM one.** This app has no per-user ownership
+  (anyone may edit any sheet), and home-brew gear is normal at the table.
+- **Compendium Rewards are seeded from `shared/rewards.js`, not re-typed.** The tier text and values
+  come from the same quality tables the sheet's F/G/K/CF/CM/RI dropdowns use, so the two cannot
+  drift. Cunning Make is listed once, applying to both armour and shields.
+- **Virtue effect text is summarised, not transcribed.** Written in the same terse mechanical style
+  as the Reward qualities ("+2 Injury", "−2 Load") rather than quoted from the rulebook — worth a
+  glance against your book before leaning on the exact wording.
+- **Compendium pickers never replace free text.** Rewards and Virtues append the picked entry to the
+  existing text box; weapon/armour pickers add a pre-filled row you can then edit, alongside the
+  blank-row buttons. Home-brew stays a first-class option.
+- **The Journey Log map is rendered client-side.** The browser already has the map image, the hex
+  geometry and the overlay code, so no server-side image pipeline was needed. It's generated when
+  the GM closes a journey out, stored as a PNG data URL on the journey row, and there's a
+  Draw/Redraw button on the log for journeys that predate the feature.
 - **"The Company" for Fatigue/Shadow/Hope effects** = the heroes with a travel role assigned to this
   journey. If nobody has a role, it falls back to all characters.
 - **Multiple heroes holding the rolled role.** The rulebook targets "the Scouts" (plural) but only
@@ -155,6 +224,94 @@ Things the spec left open, and what was chosen:
   means the result is not broadcast; "whisper to GM" broadcasts to GM sockets only.
 - **Marching Tests are recorded in the journey log** as their own entry kind, so the day maths is
   auditable; the log view renders them more quietly than events.
+- **The player map shows no GM hex tagging.** `HexMap` already had `showTags` split from `showGrid`;
+  `MapView` now passes `showTags={isGM}`. Players get the plain map art, the grid lines they need to
+  click a route, the party token and the route — no region tint, hard-terrain hatching, road strokes,
+  Perilous outlines or hex labels. Those are GM prep, and reading them off the map is reading the
+  GM's notes.
+- **Minimum Standard of Living is a hint, never a gate.** Catalogue armour and shields carry the
+  requirement; the sheet's picker annotates each option ("Shield — needs Common") and, after adding
+  an item the hero cannot normally afford, shows a warning *next to that picker* — with the item
+  already on the sheet. Same "say so, then let the table decide" line the app takes on Rearward melee
+  attacks and mounted travel over hard terrain. The rule governs character creation, not what a hero
+  may pick up mid-campaign.
+- **The Minimum Standard of Living mapping is explicit, not derived from the source tables'
+  asterisks.** Mail-shirt and Shield → Common; Coat of Mail and Great Shield → Prosperous; everything
+  else → none. ⚠️ **Flagging a real discrepancy:** the source armour table marks *Helm* with a single
+  `*`, the same marker Mail-shirt carries, which by that pattern would put Helm at Common — but the
+  explicit instruction was "none", and that is what is implemented. The shields table is
+  self-inconsistent in the same way (both Shield and Great Shield carry `**` despite needing
+  different tiers), which is why the asterisks are not trusted at all. Worth a check against your
+  book; it is a one-line change in `CORE_ARMOUR` if Helm should be Common.
+- **Three weapons have two Injury ratings, one per grip; Damage never changes.** Long Sword (16/18),
+  Spear (14/16) and Long-hafted Axe (18/20) store both as `injury` + `injuryTwoHanded`, and the sheet's
+  weapon row grows a Grip dropdown for exactly those three (everything else shows "—"). `gripInjury()`
+  in `shared/rewards.js` picks the rating in use and Fell stacks on top of whichever it is. Flattening
+  to one number would have lost half the rule.
+- **Unarmed stores Injury 0 and keeps its caveat in Notes.** Its Injury is "–" in the table because it
+  cannot cause a Piercing Blow. That is one row's worth of exception, so it did not earn a schema flag
+  — the Notes text carries it.
+- **Armour's Type (Leather / Mail / Headgear) is Compendium-only.** It groups the catalogue; it is not
+  pushed onto the sheet's armour rows, and `catalogueItemToArmour()` deliberately does not copy it.
+  A Helm's Protection needs no stacking logic either — `totalProtection()` already sums every equipped
+  armour row, so a Helm is simply another row worth 1.
+- **Cultural Virtues get their own table, not a Culture column on `virtues`.** Different retrieval
+  semantics (you look them up by culture, never alphabetically across all ten) and a different
+  identity: several Virtue names appear under more than one culture, so a Cultural Virtue is keyed on
+  (name, culture). Descriptions are **transcribed** rather than summarised, unlike the terse core
+  Virtue effects — a Cultural Virtue's wording usually carries the whole rule.
+- **One research note was stripped from the imported Cultural Virtues.** The Beornings' "Brother to
+  Bears" carried a parenthetical asking the reader to verify a symbol against the book; that is a note
+  to a researcher, not rules text. The six **Bree Hobbits** rows keep their parenthetical about that
+  culture's hybrid creation rule — that *is* rules content. (The brief described four such rows; the
+  source file has six, and all six were left untouched.)
+- **The Discord bold lives in the Discord layer, not the dice engine.** `describeRoll()` still returns
+  plain text, because the same string is shown verbatim in the app's roll feed and RollDialog, neither
+  of which renders Markdown. `formatRollMessageForDiscord()` calls it *without* `actor` and prefixes
+  `**Name** ` itself, so only the Discord-bound copy is bold. The travel engine bolds hero names in
+  place (`boldName()`) in the Select Target, GM-targets and event-resolved lines; the Marching Test and
+  Determine Event summaries name no hero, so they were left alone. Effect strings inside a resolved
+  event ("Grimfast is Wounded") are not bolded — bolding every name in a joined list is noise.
+- **Target Number is a stat box, not a pill.** Each Attribute panel now leads with a `pool-grid`
+  holding Rating and a read-only Target No. box, the same shape the computed Load box already used.
+  The maths was already right; this is purely about giving it the weight it earns.
+- **"Playing as" is a browser preference, not an account.** Stored in `localStorage`, never sent to the
+  server. It changes nothing about permissions — anyone may still open and edit any sheet — and only
+  decides who the travel engine's "your turn to roll" prompt is addressed to. A stored id whose
+  character has since been deleted quietly resolves to nobody.
+- **The turn prompt lives at the app shell.** Rendered next to `<main>`, not inside the Map page, since
+  its whole value is reaching a player who is looking at their sheet instead of the map.
+  `promptedRollFor()` in `shared/journey.js` is the pure branch table, driven entirely by state already
+  broadcast over Socket.IO — no new server state, no polling.
+- **The prompt fires the roll; it does not open the RollDialog.** The GM-triggered Marching Test and
+  Event Resolution are not dialog rolls either — they `POST` to the travel engine, which owns the dice,
+  the Discord post and the journey-log entry. Putting a dialog in front of the player's copy would
+  create a second, divergent path and let a player edit a Marching Test's rating and TN when the GM's
+  button cannot. The prompt instead offers the one choice the dialog would have added that matters:
+  a *Spend 1 Hope* checkbox. The GM's own controls are untouched and still fire every step manually.
+- **`POST /travel/marching-test` is now player-level.** The Marching Test is the Guide's own TRAVEL
+  roll and the Guide is a player, so it sits with `/resolve` and `/fatigue-roll`. There is nothing to
+  check a roller's identity against — this app has no accounts, and "Playing as" is a preference, not
+  a login — which is the same footing every other player-level write already stands on.
+- **Handout writes are GM-only, unlike the Compendium's.** The Compendium takes the player passcode
+  because home-brew gear is normal at the table; a handout's entire point is that the GM decides when
+  the table sees it. Hidden-ness is enforced on the list, single-read *and* image routes, so it holds
+  up against someone poking at `/api` directly, and the image route sends `Cache-Control: private`
+  because a revealed handout can be hidden again.
+- **Handouts are not in the Socket.IO snapshot.** Mutations broadcast a bare `handouts:changed` ping
+  and the page refetches over HTTP. The snapshot goes to every client including players, so putting
+  handouts in it would mean either leaking hidden ones or building a second role-aware snapshot path;
+  a refetch keeps the server's role filter as the single place hidden-ness is decided.
+- **Handouts get two tiers, no full-resolution one.** A handout is a letter or a sketch, not the
+  6600px campaign map — there is no zoom-in-and-read-the-place-names case, so 1600px `view` and 420px
+  `thumb` are the whole picture. `withoutEnlargement` means a smaller upload stays its own size, and
+  `skipOversized: false` guarantees both named tiers exist so both are addressable.
+- **The party pin is anchored on its tip, not its centre.** The artwork is trimmed to its own bounding
+  box at build time, so the pin's point *is* the bottom edge of the file and anchoring is
+  bottom-centre on the hex centre — a map pin points at a place. It is drawn at 1.25× hex height so it
+  scales with the grid at every zoom and tier, with a dark canvas drop-shadow behind it: it is a warm
+  gold pin on warm-toned map art, and the shadow is doing real legibility work, not decoration. The
+  original gold dot survives as the fallback while the image loads or if it fails.
 
 ## Not in v1
 
@@ -162,6 +319,12 @@ Combat tracker, NPC/bestiary database, session notes, a full Discord bot, indivi
 and a native mobile app are all deliberately out of scope (spec §8). The nav, routing and data layer
 already leave room: `client/src/App.jsx` has a data-driven `NAV` array with placeholder routes, so
 adding one means writing a page component and flipping a flag.
+
+The Compendium leaves the same room. Its sections are declared as data in
+`shared/compendium.js` (`COMPENDIUM_SECTIONS`) and in `COMPENDIUM_TABLES` in `server/lib/store.js`,
+and `server/routes/compendium.js` is one generic CRUD handler over them — so NPCs or a Bestiary
+become a table, a section entry and a render branch, not another route file. One table per section
+rather than a single polymorphic table, because the sections have genuinely different columns.
 
 ## Later: Postgres + Railway
 
@@ -172,7 +335,11 @@ Not part of this build. When you're ready:
    and the JSON-as-text columns map straight across, and no raw SQLite-only SQL is used anywhere.
 2. `server/db/index.js` is the only place a driver is constructed — swap `better-sqlite3` for `pg`
    and `drizzle-orm/node-postgres`.
-3. Replace `server/db/migrate.js` with `drizzle-kit generate` + the Drizzle migrator.
+3. Replace `server/db/migrate.js` with `drizzle-kit generate` + the Drizzle migrator. That file is
+   also the one place SQLite-specific SQL lives — `addMissingColumns()` guards its `ALTER TABLE`s
+   with a `PRAGMA table_info` read, since SQLite has no `ADD COLUMN IF NOT EXISTS`. Keep
+   `server/db/seedCompendium.js` (its prepared statements are plain portable SQL) and call it after
+   the migrator.
 4. Then follow spec §3 for Railway: push to GitHub, deploy from repo, add PostgreSQL, set
    `PLAYER_PASSCODE` / `GM_PASSCODE` / `SESSION_SECRET` / `DISCORD_WEBHOOK_URL`, confirm
    `DATABASE_URL` is linked, generate a domain. `npm run build` + `npm start` serves the built client

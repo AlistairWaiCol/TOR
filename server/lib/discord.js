@@ -68,11 +68,43 @@ const KIND_ICONS = {
   parry: '🛡️',
 };
 
-/** Short, readable one-liner for a roll — not a wall of JSON. */
+/**
+ * Short, readable one-liner for a roll — not a wall of JSON.
+ *
+ * This is the PLAIN-TEXT form. It is what the app's own roll feed and the
+ * RollDialog's result line show, and neither of those renders Markdown, so it
+ * must never contain `**`.
+ */
 export function formatRollMessage({ kind = 'skill', label, actor, result, extra }) {
   const icon = KIND_ICONS[kind] || '🎲';
   const body = describeRoll(result, { label: label || 'Roll', actor });
   return `${icon} ${body}${extra ? ` ${extra}` : ''}`;
+}
+
+/**
+ * The same line, Discord-bound: the rolling hero's name leads, in bold, so a
+ * channel full of rolls is scannable by who rolled.
+ *
+ * `describeRoll()` is deliberately called WITHOUT `actor` and the name prefixed
+ * here instead — the bold belongs to this Discord-only formatting layer, not to
+ * the shared dice engine whose output is also shown as plain text in-app.
+ */
+export function formatRollMessageForDiscord({ kind = 'skill', label, actor, result, extra }) {
+  const icon = KIND_ICONS[kind] || '🎲';
+  const body = describeRoll(result, { label: label || 'Roll' });
+  return `${icon} ${bold(actor)}${body}${extra ? ` ${extra}` : ''}`;
+}
+
+/** `**Name** ` for Discord, or '' when there is no actor. Never used in-app. */
+export function bold(actor) {
+  const name = String(actor ?? '').trim();
+  return name ? `**${name}** ` : '';
+}
+
+/** A hero's name bolded in place, for messages the name does not lead. */
+export function boldName(name) {
+  const clean = String(name ?? '').trim();
+  return clean ? `**${clean}**` : '';
 }
 
 export function formatMessage(icon, text) {

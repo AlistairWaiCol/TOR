@@ -38,7 +38,7 @@ import {
 } from '../../shared/journey.js';
 import { hexKey } from '../../shared/hexMath.js';
 import { performRoll } from './rollService.js';
-import { formatMessage, postToDiscord } from './discord.js';
+import { boldName, formatMessage, postToDiscord } from './discord.js';
 import { broadcastSnapshot } from '../realtime.js';
 import {
   adjustCharacterPool,
@@ -462,7 +462,7 @@ export async function rollSelectTarget() {
     await postToDiscord(
       formatMessage(
         '🎯',
-        `Select Target: ${d6} → ${roleLabel(roleKey)} (${skill.toUpperCase()}) — ${nameOf(holders[0])}.`,
+        `Select Target: ${d6} → ${roleLabel(roleKey)} (${skill.toUpperCase()}) — ${boldName(nameOf(holders[0]))}.`,
       ),
     );
     await saveState({
@@ -500,7 +500,7 @@ export async function assignEventTarget({ characterId }) {
 
   await updateJourneyEvent(pending.eventId, { targetCharacterId: characterId });
   await postToDiscord(
-    formatMessage('🎯', `GM targets ${character.name} (${pending.skill.toUpperCase()}).`),
+    formatMessage('🎯', `GM targets ${boldName(character.name)} (${pending.skill.toUpperCase()}).`),
   );
   await saveState({
     phase: 'awaiting_event_die',
@@ -712,7 +712,7 @@ export async function resolveEvent({ hopeSpent = false, note = '', characterId }
   await postToDiscord(
     formatMessage(
       '📜',
-      `${eventDef.name} resolved — ${target?.name ?? 'target'} ${result.success ? 'succeeds' : 'fails'}. ` +
+      `${eventDef.name} resolved — ${boldName(target?.name ?? 'target')} ${result.success ? 'succeeds' : 'fails'}. ` +
         `${applied.length ? applied.join('; ') : 'No further effect'}.`,
     ),
   );
@@ -891,7 +891,7 @@ export async function rollFatigueRelief({ characterId, hopeSpent = false } = {})
   await postToDiscord(
     formatMessage(
       '💤',
-      `${character.name} rolls TRAVEL to shake off the road — ${result.success ? `−${step.rollReduction} Fatigue` : 'no relief'} (now ${step.finalFatigue}).`,
+      `${boldName(character.name)} rolls TRAVEL to shake off the road — ${result.success ? `−${step.rollReduction} Fatigue` : 'no relief'} (now ${step.finalFatigue}).`,
     ),
   );
 

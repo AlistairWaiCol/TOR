@@ -31,9 +31,19 @@ router.post(
   }),
 );
 
+/**
+ * The Guide's own TRAVEL roll, and the Guide is a player — so this takes the
+ * player passcode, the same as `/resolve` and `/fatigue-roll`. The GM's button
+ * on the Map page still fires it too; nothing here is GM-gated any more.
+ *
+ * There is nothing to check the roller's identity against: this app has no
+ * per-user accounts, and the "who am I playing" selector is a browser-local
+ * preference, not a login. Which is the same footing every other player-level
+ * write in the app already stands on.
+ */
 router.post(
   '/marching-test',
-  requireGM,
+  requireAuth,
   asyncHandler(async (req, res) => {
     res.json(await engine.rollMarchingTest(req.body ?? {}));
   }),

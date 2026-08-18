@@ -44,7 +44,7 @@ router.get(
   }),
 );
 
-/** Whole-journey notes / title. */
+/** Whole-journey notes / title, and the Journey Log's map snapshot. */
 router.patch(
   '/:id',
   requireAuth,
@@ -52,6 +52,18 @@ router.patch(
     const patch = {};
     if (req.body.notes != null) patch.notes = String(req.body.notes);
     if (req.body.title != null) patch.title = String(req.body.title);
+    if (req.body.mapSnapshot != null) {
+      // Rendered client-side from the map the browser already has; only ever a
+      // PNG data URL, and small enough to sit in the journey row.
+      const snapshot = String(req.body.mapSnapshot);
+      if (snapshot && !snapshot.startsWith('data:image/png;base64,')) {
+        return res.status(400).json({ error: 'The map snapshot must be a PNG data URL.' });
+      }
+      if (snapshot.length > 6 * 1024 * 1024) {
+        return res.status(400).json({ error: 'That map snapshot is too large.' });
+      }
+      patch.mapSnapshot = snapshot;
+    }
     const journey = await updateJourney(req.params.id, patch);
     if (!journey) return res.status(404).json({ error: 'Journey not found.' });
     broadcast('journey:update', journey);

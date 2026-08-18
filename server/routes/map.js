@@ -89,7 +89,7 @@ router.post(
 /**
  * Build a calibration from an image already sitting in uploads/seed — used by
  * `npm run seed:map` and the "use the seeded Wilderland map" button, so the GM
- * doesn't have to re-upload 29MB through the browser.
+ * doesn't have to re-upload a multi-MB file through the browser.
  */
 router.post(
   '/calibrations/from-seed',
@@ -152,7 +152,7 @@ router.post(
 
 /**
  * The ONLY route that serves map pixels, and it can only ever read from the
- * derivatives directory — the 29MB original is never reachable over HTTP.
+ * derivatives directory — the multi-MB original is never reachable over HTTP.
  */
 router.get(
   '/calibrations/:id/image/:tier',
@@ -184,6 +184,8 @@ function normaliseTags(body = {}) {
     perilous: Boolean(body.perilous),
     perilRating: Math.max(0, Number(body.perilRating) || 0),
     label: body.label != null ? String(body.label) : '',
+    // Optional link to a Compendium Location; '' clears it.
+    linkedLocationId: body.linkedLocationId ? String(body.linkedLocationId) : null,
   };
 }
 

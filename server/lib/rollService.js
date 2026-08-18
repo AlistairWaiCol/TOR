@@ -8,11 +8,12 @@
  */
 
 import { rollDice } from '../../shared/dice.js';
-import { rollContextForSkill } from '../../shared/character.js';
-import { formatRollMessage, postToDiscord } from './discord.js';
+import { computeWeary, rollContextForSkill } from '../../shared/character.js';
+import { formatRollMessage, formatRollMessageForDiscord, postToDiscord } from './discord.js';
 import { broadcast, broadcastToGM } from '../realtime.js';
 import {
   adjustCharacterPool,
+  characterIsTravelling,
   createRoll,
   getCampaign,
   getCharacter,
@@ -52,15 +53,21 @@ export async function performRoll(input = {}, { rng } = {}) {
   if (input.characterId) {
     character = await getCharacter(input.characterId);
     if (!character) throw Object.assign(new Error('Character not found.'), { status: 404 });
+    // Weary is derived, not stored: Endurance <= Load, and Fatigue counts on top
+    // of Load while this hero is on the road.
+    const travelling = await characterIsTravelling(character.id);
     if (input.skill) {
-      context = { ...context, ...rollContextForSkill(character.sheet, input.skill, { tnBase }) };
+      context = {
+        ...context,
+        ...rollContextForSkill(character.sheet, input.skill, { tnBase, travelling }),
+      };
     } else {
       const c = character.sheet.conditions;
       context = {
         ...context,
         favoured: c.favourState === 'Favoured',
         illFavoured: c.favourState === 'Ill-Favoured',
-        weary: Boolean(c.weary),
+        weary: computeWeary(character.sheet, { travelling }),
         miserable: Boolean(c.miserable),
         inspired: Boolean(c.inspired),
         hope: character.sheet.attributes.heart.hope,
@@ -123,14 +130,17 @@ export async function performRoll(input = {}, { rng } = {}) {
     note: input.note || '',
   });
 
-  const message = formatRollMessage({
+  // Two forms of the same line: the plain one is broadcast to the app (whose
+  // roll feed is not Markdown-rendered), the bold-name one goes to Discord.
+  const describeArgs = {
     kind: input.kind || 'skill',
     label,
     actor: actorName,
     result,
     extra: input.discordExtra,
-  });
-  const discord = await postToDiscord(message, { whisperTo });
+  };
+  const message = formatRollMessage(describeArgs);
+  const discord = await postToDiscord(formatRollMessageForDiscord(describeArgs), { whisperTo });
 
   const payload = { roll, message, whisperTo };
   if (whisperTo === 'public') broadcast('roll:new', payload);
