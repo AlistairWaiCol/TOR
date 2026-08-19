@@ -378,19 +378,14 @@ export const CULTURAL_VIRTUES = [
   },
 ];
 
-/** Cultures represented, in the order they first appear. */
-export const CULTURAL_VIRTUE_CULTURES = [
-  'Bardings',
-  'Dwarves of Durin\'s Folk',
-  'Elves of Lindon',
-  'Hobbits of the Shire',
-  'Men of Bree',
-  'Rangers of the North',
-  'Bree Hobbits',
-  'Beornings',
-  'Elves of Mirkwood',
-  'Woodmen of Wilderland',
-];
+/**
+ * Cultures represented, in the order they first appear.
+ *
+ * DERIVED from the rows above, not typed out a second time — this is also the
+ * character sheet's Culture dropdown, and a hand-maintained copy could drift
+ * out of step with the Virtues it is supposed to select.
+ */
+export const CULTURAL_VIRTUE_CULTURES = [...new Set(CULTURAL_VIRTUES.map((v) => v.culture))];
 
 /** Every Cultural Virtue for one culture, matched case-insensitively. */
 export function culturalVirtuesFor(culture, entries = CULTURAL_VIRTUES) {

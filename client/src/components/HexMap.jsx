@@ -64,6 +64,12 @@ export default function HexMap({
   onHexHover,
   paintable = false,
   height = '74vh',
+  // Freehand mode: drag a line across the map instead of clicking hexes. The
+  // caller gets the raw trail in ORIGINAL-image pixel coordinates and sends it
+  // to the server, which does the snapping — nothing here knows or shows where
+  // a hex boundary is, which is the whole point on the player-side map.
+  freehand = false,
+  onFreehandPath,
 }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
@@ -72,6 +78,11 @@ export default function HexMap({
   const [painting, setPainting] = useState(false);
   const lastPainted = useRef('');
   const lastHovered = useRef('');
+  // The in-progress stroke, kept in refs rather than state: a pointermove fires
+  // far more often than React should re-render, so the points are pushed to a
+  // ref and a single rAF-scheduled redraw picks them up.
+  const strokeRef = useRef(null); // [{ canvas: {x,y}, original: {x,y} }]
+  const redrawHandle = useRef(0);
 
   const chosenTier = useMemo(() => {
     const tiers = calibration?.tiers ?? [];
@@ -288,19 +299,67 @@ export default function HexMap({
         ctx.stroke();
       }
     }
+
+    // The line currently under the finger. Drawn last so it sits over
+    // everything, and drawn exactly as it was traced — no snapping is shown.
+    const stroke = strokeRef.current;
+    if (stroke && stroke.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(240, 214, 139, 0.95)';
+      ctx.lineWidth = Math.max(2.5, cal.hexHeight * 0.12);
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+      ctx.shadowBlur = 4;
+      ctx.beginPath();
+      stroke.forEach((p, i) =>
+        i === 0 ? ctx.moveTo(p.canvas.x, p.canvas.y) : ctx.lineTo(p.canvas.x, p.canvas.y),
+      );
+      ctx.stroke();
+      ctx.restore();
+    }
   }, [calibration, chosenTier, image, pin, zoom, showGrid, showTags, hexIndex, route, currentHex, pinHex, selected]);
+
+  /** Coalesce stroke redraws to one per animation frame. */
+  const scheduleRedraw = useCallback(() => {
+    if (redrawHandle.current) return;
+    redrawHandle.current = requestAnimationFrame(() => {
+      redrawHandle.current = 0;
+      draw();
+    });
+  }, [draw]);
 
   useEffect(() => {
     draw();
   }, [draw]);
 
-  const hexAtEvent = (e) => {
+  // A stroke redraw scheduled as the component goes away would run against a
+  // canvas that no longer exists.
+  useEffect(
+    () => () => {
+      if (redrawHandle.current) cancelAnimationFrame(redrawHandle.current);
+    },
+    [],
+  );
+
+  /**
+   * A pointer event in both coordinate spaces: canvas pixels (what we draw in)
+   * and original-image pixels (what the calibration and the server speak).
+   */
+  const pointAtEvent = (e) => {
     const canvas = canvasRef.current;
     if (!canvas || !calibration) return null;
     const rect = canvas.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
     const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
     const s = canvas.width / calibration.originalWidth;
+    return { canvas: { x, y }, original: { x: x / s, y: y / s }, scale: s };
+  };
+
+  const hexAtEvent = (e) => {
+    const p = pointAtEvent(e);
+    if (!p) return null;
+    const s = p.scale;
     const cal = {
       hexEdge: calibration.hexEdge * s,
       hexWidth: calibration.hexWidth * s,
@@ -311,7 +370,49 @@ export default function HexMap({
       offsetY: calibration.offsetY * s,
       rotation: calibration.rotation,
     };
-    return pixelToHex(x, y, cal);
+    return pixelToHex(p.canvas.x, p.canvas.y, cal);
+  };
+
+  /* --- freehand drawing --------------------------------------------------- */
+
+  const startStroke = (e) => {
+    const p = pointAtEvent(e);
+    if (!p) return;
+    strokeRef.current = [p];
+    // Pointer capture keeps the trail coming even when the finger or cursor
+    // wanders off the canvas mid-drag, so a line drawn to the edge of the map
+    // does not simply stop being recorded.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Not fatal — the stroke just ends early if the pointer leaves.
+    }
+    scheduleRedraw();
+  };
+
+  const extendStroke = (e) => {
+    if (!strokeRef.current) return;
+    const p = pointAtEvent(e);
+    if (!p) return;
+    const last = strokeRef.current[strokeRef.current.length - 1];
+    // Drop sub-pixel jitter; the server resamples evenly anyway.
+    if (Math.hypot(p.canvas.x - last.canvas.x, p.canvas.y - last.canvas.y) < 1.5) return;
+    strokeRef.current.push(p);
+    scheduleRedraw();
+  };
+
+  const endStroke = (e) => {
+    const stroke = strokeRef.current;
+    strokeRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // Already released, or never captured.
+    }
+    scheduleRedraw();
+    // A tap is not a drawn route — leave the existing one alone.
+    if (!stroke || stroke.length < 2) return;
+    onFreehandPath?.(stroke.map((p) => p.original));
   };
 
   if (!calibration) {
@@ -328,14 +429,37 @@ export default function HexMap({
     <div className="map-canvas-wrap" ref={wrapRef} style={{ maxHeight: height }}>
       <canvas
         ref={canvasRef}
-        onMouseDown={(e) => {
+        // Pointer events rather than mouse events, so a finger on a tablet at
+        // the table is the same code path as a mouse — freehand drawing needs
+        // it, and GM hex painting gets touch support for free.
+        style={freehand ? { touchAction: 'none', cursor: 'crosshair' } : undefined}
+        onPointerDown={(e) => {
+          if (freehand) {
+            startStroke(e);
+            return;
+          }
           const hx = hexAtEvent(e);
           if (!hx) return;
           lastPainted.current = hexKey(hx.col, hx.row);
           if (paintable) setPainting(true);
           onHexClick?.(hx, e);
         }}
-        onMouseMove={(e) => {
+        onPointerMove={(e) => {
+          if (freehand) {
+            // Mid-stroke the pointer is drawing, not pointing; the rest of the
+            // time a player still gets the Location tooltip on hover.
+            if (strokeRef.current) {
+              extendStroke(e);
+              return;
+            }
+            const over = hexAtEvent(e);
+            if (!over || !onHexHover) return;
+            const overKey = hexKey(over.col, over.row);
+            if (overKey === lastHovered.current) return;
+            lastHovered.current = overKey;
+            onHexHover(over, { clientX: e.clientX, clientY: e.clientY });
+            return;
+          }
           const hx = hexAtEvent(e);
           if (!hx) return;
           const key = hexKey(hx.col, hx.row);
@@ -352,8 +476,26 @@ export default function HexMap({
           lastPainted.current = key;
           onHexClick?.(hx, e);
         }}
-        onMouseUp={() => setPainting(false)}
-        onMouseLeave={() => {
+        onPointerUp={(e) => {
+          if (freehand) {
+            endStroke(e);
+            return;
+          }
+          setPainting(false);
+        }}
+        // A cancelled pointer (the browser taking over the gesture, a stylus
+        // lifted oddly) must not leave a half-drawn stroke on the canvas.
+        onPointerCancel={(e) => {
+          if (freehand) {
+            strokeRef.current = null;
+            scheduleRedraw();
+            return;
+          }
+          setPainting(false);
+        }}
+        onPointerLeave={() => {
+          // Pointer capture keeps a stroke in progress alive past the edge.
+          if (freehand && strokeRef.current) return;
           setPainting(false);
           lastHovered.current = '';
           onHexHover?.(null);

@@ -56,6 +56,17 @@ async function call(method, url, body, token) {
 const gm = (m, u, b) => call(m, u, b, gmToken);
 const player = (m, u, b) => call(m, u, b, playerToken);
 
+const { hexDistance, hexPolygon } = await import('../shared/hexMath.js');
+
+/**
+ * Where a finger would land to hit hex (col,row), in the original-image pixel
+ * space the freehand route endpoint speaks.
+ */
+function hexCentre(calibration, col, row) {
+  const poly = hexPolygon(col, row, calibration);
+  return { x: (poly[0].x + poly[3].x) / 2, y: (poly[1].y + poly[4].y) / 2 };
+}
+
 before(async () => {
   // Give listen() a moment.
   await new Promise((r) => setTimeout(r, 400));
@@ -1273,5 +1284,160 @@ describe('Special Success spends are announced to Discord', () => {
     assert.equal(r.status, 200);
     assert.equal(r.data.discord.posted, false);
     assert.equal(r.data.discord.reason, 'whispered');
+  });
+});
+
+
+/**
+ * Route tools: who may clear a route, and the freehand draw endpoint.
+ *
+ * Both are player-level writes gated on the route's LOCKED state rather than on
+ * the caller's role, which is the rule the UI also renders — checked here
+ * because "the button is hidden" is not an access control.
+ */
+describe('route tools', () => {
+  const HEXES = [
+    { col: 2, row: 2 },
+    { col: 3, row: 2 },
+    { col: 4, row: 2 },
+  ];
+
+  async function calibrationForRoutes() {
+    const list = await gm('GET', '/map/calibrations');
+    return list.data.calibrations.find((c) => c.active) ?? list.data.calibrations[0];
+  }
+
+  it('lets a player clear an unlocked route', async () => {
+    await player('PATCH', '/party', { route: HEXES });
+    const cleared = await player('POST', '/party/clear-route');
+    assert.equal(cleared.status, 200);
+    assert.deepEqual(cleared.data.party.route, []);
+  });
+
+  it('refuses a player clearing a route the GM has locked', async () => {
+    await player('PATCH', '/party', { route: HEXES });
+    await gm('PATCH', '/party', { routeLocked: true });
+
+    const denied = await player('POST', '/party/clear-route');
+    assert.equal(denied.status, 403, 'a locked route is not a player\'s to clear');
+    assert.equal((await player('GET', '/party')).data.party.route.length, HEXES.length);
+
+    // The GM still can, and clearing unlocks in the same move.
+    const byGM = await gm('POST', '/party/clear-route');
+    assert.equal(byGM.status, 200);
+    assert.deepEqual(byGM.data.party.route, []);
+    assert.equal(byGM.data.party.routeLocked, false);
+  });
+
+  it('turns a drawn line into the same route data a click would', async () => {
+    const cal = await calibrationForRoutes();
+    assert.ok(cal, 'the map derivative tests should have left a calibration');
+
+    // Two points, five hexes apart, with nothing sampled in between — the
+    // server has to fill the gap itself.
+    const from = hexCentre(cal, 4, 3);
+    const to = hexCentre(cal, 9, 5);
+    const r = await player('POST', '/party/draw-route', { points: [from, to] });
+    assert.equal(r.status, 200);
+
+    const route = r.data.party.route;
+    assert.deepEqual(route[0], { col: 4, row: 3 });
+    assert.deepEqual(route[route.length - 1], { col: 9, row: 5 });
+    for (const h of route) assert.deepEqual(Object.keys(h).sort(), ['col', 'row']);
+    for (let i = 1; i < route.length; i += 1) {
+      assert.equal(
+        hexDistance(route[i - 1], route[i]),
+        1,
+        `route must be walkable one hex at a time: ${JSON.stringify(route)}`,
+      );
+    }
+  });
+
+  it('refuses a drawn line while the route is locked, and needs a passcode', async () => {
+    const cal = await calibrationForRoutes();
+    const points = [hexCentre(cal, 2, 2), hexCentre(cal, 6, 2)];
+
+    await gm('PATCH', '/party', { routeLocked: true });
+    const denied = await player('POST', '/party/draw-route', { points });
+    assert.equal(denied.status, 403);
+    const stillGM = await gm('POST', '/party/draw-route', { points });
+    assert.equal(stillGM.status, 200, 'the GM is not locked out by their own lock');
+
+    const anon = await call('POST', '/party/draw-route', { points });
+    assert.equal(anon.status, 401);
+
+    await gm('POST', '/party/clear-route');
+  });
+
+  it('rejects a line with nothing in it', async () => {
+    const r = await player('POST', '/party/draw-route', { points: [{ x: 10, y: 10 }] });
+    assert.equal(r.status, 400);
+  });
+});
+
+/**
+ * Adventure Notes — one entry per Year + Season, open to anyone with the
+ * player passcode (unlike Handouts, which are GM-written and hidden by default).
+ */
+describe('Adventure Notes', () => {
+  it('reads an unwritten season as an empty note, not a 404', async () => {
+    const r = await player('GET', '/notes/2946/Spring');
+    assert.equal(r.status, 200);
+    assert.equal(r.data.note, null);
+  });
+
+  it('creates on first write and updates in place afterwards', async () => {
+    const first = await player('PUT', '/notes/2946/Spring', {
+      title: 'The road east',
+      body: 'Met a ranger at the ford.',
+    });
+    assert.equal(first.status, 200);
+    assert.equal(first.data.note.title, 'The road east');
+    const id = first.data.note.id;
+
+    const second = await player('PUT', '/notes/2946/Spring', {
+      title: 'The road east',
+      body: 'Met a ranger at the ford. He warned us off the old track.',
+    });
+    assert.equal(second.status, 200);
+    assert.equal(second.data.note.id, id, 'a second write must not make a second entry');
+    assert.match(second.data.note.body, /old track/);
+
+    const all = await player('GET', '/notes');
+    const springs = all.data.notes.filter((n) => n.year === 2946 && n.season === 'Spring');
+    assert.equal(springs.length, 1, 'one entry per Year + Season');
+  });
+
+  it('keeps each Year/Season separate', async () => {
+    await player('PUT', '/notes/2946/Autumn', { title: 'Autumn', body: 'Leaf-fall.' });
+    await player('PUT', '/notes/2947/Spring', { title: 'Next year', body: 'Thaw.' });
+    assert.equal((await player('GET', '/notes/2946/Spring')).data.note.title, 'The road east');
+    assert.equal((await player('GET', '/notes/2946/Autumn')).data.note.title, 'Autumn');
+    assert.equal((await player('GET', '/notes/2947/Spring')).data.note.title, 'Next year');
+  });
+
+  it('is writable by a player, not just the GM — unlike a Handout', async () => {
+    const byPlayer = await player('PUT', '/notes/2948/Winter', { title: 'Player wrote this', body: '' });
+    assert.equal(byPlayer.status, 200);
+    const byGM = await gm('PUT', '/notes/2948/Winter', { title: 'GM edited it', body: '' });
+    assert.equal(byGM.status, 200);
+    assert.equal(byGM.data.note.title, 'GM edited it');
+  });
+
+  it('rejects a season that is not one of the four', async () => {
+    assert.equal((await player('PUT', '/notes/2946/Harvest', { title: 'x' })).status, 400);
+    assert.equal((await player('GET', '/notes/2946/Harvest')).status, 400);
+  });
+
+  it('still needs a passcode', async () => {
+    assert.equal((await call('GET', '/notes')).status, 401);
+    assert.equal((await call('PUT', '/notes/2946/Spring', { title: 'nope' })).status, 401);
+  });
+
+  it('deletes one season without touching the others', async () => {
+    const r = await player('DELETE', '/notes/2946/Autumn');
+    assert.equal(r.status, 200);
+    assert.equal((await player('GET', '/notes/2946/Autumn')).data.note, null);
+    assert.ok((await player('GET', '/notes/2946/Spring')).data.note, 'Spring should survive');
   });
 });

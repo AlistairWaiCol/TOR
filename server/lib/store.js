@@ -6,10 +6,11 @@
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { hydrateSheet } from '../../shared/character.js';
-import { isCharacterTravelling } from '../../shared/journey.js';
+import { SEASONS, isCharacterTravelling } from '../../shared/journey.js';
 import { DEFAULT_CALIBRATION, hexKey } from '../../shared/hexMath.js';
 
 const {
+  adventureNotes,
   campaignState,
   characters,
   culturalVirtues,
@@ -820,6 +821,64 @@ export async function updateHandout(id, patch = {}) {
 
 export async function deleteHandout(id) {
   await db.delete(handouts).where(eq(handouts.id, id));
+  return true;
+}
+
+/* --- adventure notes ---------------------------------------------------------
+ * One entry per Year + Season, so (year, season) is the key everything works
+ * from — there is no create-vs-update distinction to expose, only an upsert.
+ * `year` is coerced to a number here so a form's string "2946" and a stored
+ * 2946 cannot end up as two different seasons' worth of notes.
+ */
+
+export async function listAdventureNotes() {
+  const rows = await db.select().from(adventureNotes);
+  return rows.sort(
+    (a, b) => a.year - b.year || SEASONS.indexOf(a.season) - SEASONS.indexOf(b.season),
+  );
+}
+
+export async function getAdventureNote(year, season) {
+  const rows = await db
+    .select()
+    .from(adventureNotes)
+    .where(and(eq(adventureNotes.year, Number(year) || 0), eq(adventureNotes.season, String(season))));
+  return rows[0] ?? null;
+}
+
+/**
+ * Write the note for one Year + Season, creating it if this is the first time
+ * anyone has typed into that season. An upsert rather than POST-then-PATCH
+ * because the page has no "create" step: you pick a season and start writing.
+ */
+export async function saveAdventureNote({ year, season, title = '', body = '' } = {}) {
+  const y = Number(year) || 0;
+  const s = String(season);
+  const nowIso = new Date().toISOString();
+  const existing = await getAdventureNote(y, s);
+  if (existing) {
+    await db
+      .update(adventureNotes)
+      .set({ title: String(title ?? ''), body: String(body ?? ''), updatedAt: nowIso })
+      .where(eq(adventureNotes.id, existing.id));
+  } else {
+    await db.insert(adventureNotes).values({
+      id: newId(),
+      year: y,
+      season: s,
+      title: String(title ?? ''),
+      body: String(body ?? ''),
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
+  }
+  return getAdventureNote(y, s);
+}
+
+export async function deleteAdventureNote(year, season) {
+  await db
+    .delete(adventureNotes)
+    .where(and(eq(adventureNotes.year, Number(year) || 0), eq(adventureNotes.season, String(season))));
   return true;
 }
 

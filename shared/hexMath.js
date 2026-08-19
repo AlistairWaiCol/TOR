@@ -134,10 +134,14 @@ export function hexesInBounds(width, height, calibration, pad = 1) {
 
 /* --- offset <-> cube conversions, for adjacency and distance --------------- */
 
-function offsetToCube(col, row) {
+export function offsetToCube(col, row) {
   const x = col;
   const z = row - (col - (col & 1)) / 2;
   return { x, y: -x - z, z };
+}
+
+export function cubeToOffset({ x, z }) {
+  return { col: x, row: z + (x - (x & 1)) / 2 };
 }
 
 /** Hex distance between two offset-column coordinates. */
@@ -171,4 +175,139 @@ export function hexNeighbours(col, row) {
 
 export function areAdjacent(a, b) {
   return hexDistance(a, b) === 1;
+}
+
+/* --- freehand path -> hex route --------------------------------------------
+ *
+ * The player-side map has no grid and no hex clicking: a player drags a line
+ * across the map art and the SERVER turns that line into exactly the same
+ * `[{col,row}, ...]` route the GM's click tool produces, so locking, clearing
+ * and Marching Test distance counting are all input-method-agnostic.
+ *
+ * Three steps, each pure and each testable on its own:
+ *   resamplePolyline() - even sampling, so a fast drag is not a straight jump
+ *   pixelToHex()       - nearest centre IS the containing hex (see above)
+ *   hexLine()          - fills any gap a coarse or wobbly sample left behind
+ */
+
+/** Round a fractional cube coordinate to the nearest whole hex. */
+function cubeRound(x, y, z) {
+  let rx = Math.round(x);
+  let ry = Math.round(y);
+  let rz = Math.round(z);
+  const dx = Math.abs(rx - x);
+  const dy = Math.abs(ry - y);
+  const dz = Math.abs(rz - z);
+  // Re-derive whichever axis moved furthest, so x + y + z stays 0.
+  if (dx > dy && dx > dz) rx = -ry - rz;
+  else if (dy > dz) ry = -rx - rz;
+  else rz = -rx - ry;
+  return { x: rx, y: ry, z: rz };
+}
+
+/**
+ * The shortest run of hexes from `a` to `b` inclusive — cube-coordinate
+ * line interpolation, rounded back to whole hexes at each step.
+ *
+ * Every consecutive pair in the result is adjacent, which is the property the
+ * gap-filling in snapPathToHexes() relies on.
+ */
+export function hexLine(a, b) {
+  const steps = hexDistance(a, b);
+  const start = { col: Number(a.col), row: Number(a.row) };
+  if (steps === 0) return [start];
+  const ca = offsetToCube(start.col, start.row);
+  const cb = offsetToCube(Number(b.col), Number(b.row));
+  // A lerp that lands exactly on an edge midpoint is a tie between two hexes;
+  // nudging the three axes by different tiny amounts (summing to ~0) breaks it
+  // the same way every time instead of leaving it to floating-point luck.
+  const e = 1e-6;
+  const out = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    out.push(
+      cubeToOffset(
+        cubeRound(
+          ca.x + (cb.x - ca.x) * t + e,
+          ca.y + (cb.y - ca.y) * t + 2 * e,
+          ca.z + (cb.z - ca.z) * t - 3 * e,
+        ),
+      ),
+    );
+  }
+  return out;
+}
+
+/**
+ * Even samples along a polyline, `spacing` pixels apart. The first and last
+ * points are always kept, so a drawn line never loses its ends.
+ */
+export function resamplePolyline(points = [], spacing = 1) {
+  const pts = points
+    .map((p) => ({ x: Number(p.x), y: Number(p.y) }))
+    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (pts.length === 0) return [];
+  const step = Math.max(1e-6, Number(spacing) || 1);
+  const out = [pts[0]];
+  let carried = 0; // distance already walked since the last emitted sample
+
+  for (let i = 1; i < pts.length; i += 1) {
+    const from = pts[i - 1];
+    const to = pts[i];
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const len = Math.hypot(dx, dy);
+    if (len === 0) continue;
+    let travelled = step - carried;
+    while (travelled <= len) {
+      const t = travelled / len;
+      out.push({ x: from.x + dx * t, y: from.y + dy * t });
+      travelled += step;
+    }
+    carried = len - (travelled - step);
+  }
+
+  const last = pts[pts.length - 1];
+  const tail = out[out.length - 1];
+  if (tail.x !== last.x || tail.y !== last.y) out.push({ x: last.x, y: last.y });
+  return out;
+}
+
+/**
+ * A drawn polyline (in ORIGINAL-image pixel space) -> a contiguous hex route.
+ *
+ * Consecutive samples that land in the same hex collapse to one entry. Where
+ * two consecutive matched hexes are NOT adjacent — a wobbly line that cuts a
+ * corner, or a fast drag sampled coarsely — the gap is filled by walking the
+ * shortest hex path between them, so the result is always a route the travel
+ * engine can step along one hex at a time.
+ *
+ * Hexes revisited later in the line are kept: doubling back is something the
+ * player drew on purpose, and the route is an ordered path, not a set.
+ *
+ * @param {Array<{x:number,y:number}>} points raw pointer trail
+ * @param {object} calibration same calibration object hexCenter()/pixelToHex() take
+ * @param {object} [opts]
+ * @param {number} [opts.spacing] sample spacing in px; defaults to a third of a hex
+ */
+export function snapPathToHexes(points = [], calibration, { spacing } = {}) {
+  const c = normalise(calibration);
+  const step = Number(spacing) > 0 ? Number(spacing) : c.hexHeight / 3;
+  const samples = resamplePolyline(points, step);
+  if (samples.length === 0) return [];
+
+  const route = [];
+  const push = (hx) => {
+    const last = route[route.length - 1];
+    if (last && last.col === hx.col && last.row === hx.row) return;
+    if (last && hexDistance(last, hx) > 1) {
+      // hexLine() includes both ends; the first is the hex we are already on.
+      for (const fill of hexLine(last, hx).slice(1)) route.push(fill);
+      return;
+    }
+    route.push({ col: hx.col, row: hx.row });
+  };
+
+  for (const s of samples) push(pixelToHex(s.x, s.y, c));
+  return route;
 }

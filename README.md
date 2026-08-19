@@ -67,10 +67,17 @@ hex grid with live sliders seeded to the measured values for the Wilderland Adve
 Per-hex tagging: Region type, and **independent** Hard Terrain and Road flags, optional Perilous
 Area with a Peril rating, optional label. Paint mode tags many hexes at once.
 
-**Live shared map** — everyone sees the same party token and proposed route; any player can click
-hexes to draw a route and it updates for everyone over Socket.IO. GM can lock or clear it. Role
-assignment enforces exactly one Guide with all four roles covered (doubling allowed elsewhere), plus
-the mounted and Forced March toggles.
+**Live shared map** — everyone sees the same party token and proposed route, updated for everyone
+over Socket.IO. **The GM clicks hexes on a grid; a player just drags a line across the map art** —
+the drawn line is sampled, snapped to hexes and gap-filled server-side into the identical route the
+click tool produces. Either role can clear an unproposed route; the GM alone can lock it, and a
+locked route is nobody else's to clear. Role assignment enforces exactly one Guide with all four
+roles covered (doubling allowed elsewhere), plus the mounted and Forced March toggles.
+
+**Live travel animation** — while the Company walks a leg, a day counter ticks through it one day at
+a time and the party token moves hex by hex in step, instead of both jumping to the end. Hard
+terrain spends a second day standing still; Forced March covers two hexes per day; a Mishap or Short
+Cut jumps the counter the moment it resolves, with a line saying why.
 
 **Travel engine** — the §6d sequence as an explicit server-side state machine: Marching Test →
 distance → Perilous Areas → Select Target → Determine Event → Resolution → repeat → Ending the
@@ -90,6 +97,10 @@ it on hover with a link into its entry. Character sheets pick Rewards, Virtues a
 the Cultural Virtue picker narrows itself to the hero's own Culture — while still accepting
 home-brew entries typed in by hand.
 
+**Adventure Notes** — the table's shared scratchpad: **one** entry, title plus free text, per campaign
+Year + Season. Pick a season and it loads what is there or gives you an empty page to start writing.
+Open to anyone with the player passcode — no GM restriction, no hidden concept, no export.
+
 **Handouts** — an image plus notes, tagged to a campaign Year + Season. Players get a Year/Season
 selector that starts on the campaign's current date and is then free to browse back through earlier
 seasons. New handouts are **hidden** until the GM reveals them, and the GM can hide them again at any
@@ -105,26 +116,32 @@ served.
 shared/          Game rules, imported by BOTH server and client — the single source of truth
   dice.js          The dice engine (§7). Pure, dependency-free, unit-tested.
   journey.js       Journey Events Table, Marching Test distance, day/Fatigue maths, role rules
-  character.js     The §5 sheet shape, skill lists, derived values (Load, Weary, attack TN, stance)
+  journey.js       ...also the live animation's tick sequence (journeyTickSequence)
+  character.js     The §5 sheet shape, skill lists, derived values (Load, Weary, attack TN, stance,
+                   shield Parry contribution, Useful Items by skill), Calling/Living Standard lists
   rewards.js       The six core Reward qualities (F/G/K/CF/CM/RI) and their effects, grip Injury
   compendium.js    Compendium sections, core Virtue/Reward/gear seed data, catalogue → sheet mapping
-  culturalVirtues.js  The 60 Cultural Virtues, by culture
-  hexMath.js       Flat-top offset-column hex geometry and the calibration defaults
+  culturalVirtues.js  The 60 Cultural Virtues, by culture — and the derived ten-culture list the
+                   character sheet's Culture dropdown uses
+  hexMath.js       Flat-top offset-column hex geometry, the calibration defaults, and the freehand
+                   polyline → contiguous hex route pipeline (resample → snap → gap-fill)
 server/
   config.js        Env + paths
   db/              Drizzle schema, connection, idempotent migration
   lib/             auth, store (repository layer), rollService, travelEngine, discord, images
-  routes/          auth, campaign, characters, compendium, handouts, map, party, travel,
+  routes/          auth, campaign, characters, compendium, handouts, map, notes, party, travel,
                    journeys, rolls
   realtime.js      Socket.IO wiring + snapshot broadcasting
 client/src/        React (Vite): pages/, components/, state/AppContext.jsx
                    assets/party-pin.png is the map's party token
                    lib/journeyMap.js renders the Journey Log's route map on an offscreen canvas
+                   components/TravelDayTicker.jsx drives the live day-by-day travel animation
 tests/             dice.test.js, journey.test.js, character.test.js, compendium.test.js,
-                   discord.test.js, integration.test.js
+                   discord.test.js, hexPath.test.js, integration.test.js
 scripts/seedMap.js Import the campaign map and build derivatives
 scripts/seedCompendium.js  Re-seed the core Virtues and Rewards (migrate() already does this)
 scripts/seedCharacters.js  Import a party roster from a characters_seed.json file
+scripts/fixCultures.js     One-off: bring stored Culture values onto the new dropdown's spellings
 uploads/
   seed/            Original map images — never served over HTTP
   originals/       Uploaded maps and handouts — never served over HTTP
@@ -345,6 +362,106 @@ Things the spec left open, and what was chosen:
   trusting the "Done" message. The correct fix is to upload the map through the live app's own GM
   screen, so the same process that writes the database row also generates the files in the right
   place — not a script change, a workflow one; see "Seeding a database" above.
+- **Clearing the route is player-level; locking it is not.** A player who has just drawn a wrong line
+  should not have to ask the GM to rub it out, so `Clear route` is no longer inside the GM block and
+  `POST /party/clear-route` is `requireAuth`. What it *is* gated on is state, not role: a locked route
+  is the GM's, and the server refuses a non-GM clearing one — the same check `PATCH /party` already
+  makes before accepting a new route. The button is disabled with a reason as well, but the button is
+  not the access control. Lock/Unlock stays GM-only.
+- **The live day counter is journey-wide and deliberately disagrees with a mounted journey's total.**
+  Mounted travel halves the day count *once, at the end* (§6g), so during the journey the live number
+  legitimately runs ahead of what eventually gets logged. Halving it live would either be wrong at
+  every intermediate step or need re-deriving on every tick; instead the box says so in as many words
+  when the journey is mounted. Everything else — hexes, hard terrain, Mishap/Short Cut — is reflected
+  live, and `journeyTickSequence()`'s day total is asserted against `computeJourneyDays()`'s
+  `beforeMount` for every shape of journey in the tests, so the two cannot drift apart silently.
+- **A hard-terrain hex inside a Forced March pair costs a day on top; it does not merge.** Nothing in
+  the rulebook or the brief addresses the overlap. The two rules are applied independently: the pair
+  still spends only one day for its two hexes of movement, and the hard-terrain hex still adds its
+  own extra day-tick. This is the only reading that agrees with `computeJourneyDays()`, which already
+  computes `ceil(hexes / 2) + hardTerrainHexes` from the aggregates — a merged reading would make the
+  live counter and the logged total differ. On screen it shows as a day passing with the token
+  standing still ("Hard going — a whole day for no ground gained").
+- **Forced March pairing carries across leg boundaries.** A journey walked as one 5-hex leg and the
+  same journey walked as a 3-hex then a 2-hex leg have to cost the same number of days, so
+  `journeyTickSequence()` takes the journey-wide hex index rather than restarting the pair at each
+  Marching Test. The half-pair at the end is charged only on the leg that actually reaches the
+  destination (`finalLeg`), which is what turns `floor(n / 2)` into `ceil(n / 2)` exactly once.
+- **Mishap / Short Cut adjustments are not animated, and are not part of the animation's state.**
+  They are added to the displayed day straight from `journey.dayAdjustments`, so they land the instant
+  the event resolves and the animation never has to know they happened — no ordering problem when an
+  event resolves while a leg is still playing out. A short banner says which it was; the next leg
+  ticks on from the adjusted total.
+- **The animation snaps, rather than replays, when you arrive part-way through a journey.** Opening
+  the map mid-journey (or reloading) puts the counter and the token where the Company actually is.
+  Only movement that happens while you are watching is animated. There is also a `skip ahead` button:
+  five seconds a day is right for watching a leg unfold and wrong for a GM who wants to get on.
+- **The player map has no grid at all — not a toggle switched off.** `showGrid` used to be shared, and
+  a player needed it to click a route. With the freehand tool they do not, so the toggle is GM-only
+  and the player canvas never draws hex boundaries. The click-mode selector goes with it: **Inspect
+  mode is now GM-only too.** That is a small scope call beyond the brief, made for two reasons —
+  inspecting a hex you cannot see is not usable, and the Inspect panel was printing region type, hard
+  terrain, roads and Perilous ratings to players, which is exactly the GM prep `showTags={isGM}` was
+  added to keep off their screen.
+- **The freehand line is snapped server-side, not in the browser.** `POST /party/draw-route` takes the
+  raw trail in original-image pixel coordinates and does resample → nearest-hex → gap-fill itself. The
+  server already owns the calibration, so this way the client never needs to know where a hex boundary
+  is — which is the whole point of the feature — and there is one place that decides what a drawn line
+  means. It writes the same `[{col,row}]` route the click tool writes, so locking, clearing and
+  Marching Test distance counting are all input-method-agnostic.
+- **A drawn line that doubles back is kept as drawn.** The click tool refuses to re-add a hex already
+  in the route; the freehand tool only collapses *consecutive* duplicates. A route is an ordered path,
+  not a set, and someone tracing out-and-back over the same ground drew that on purpose.
+- **Gap-filling uses cube-coordinate line interpolation, and the tie-break is deliberate.** A wobbly
+  or coarsely-sampled line can jump a hex near a boundary, so consecutive non-adjacent matches are
+  bridged with `hexLine()` — lerp in cube space, round back to whole hexes. A lerp landing exactly on
+  an edge midpoint is a genuine tie between two hexes; the three axes are nudged by different tiny
+  amounts (summing to ~0) so it breaks the same way every time instead of on floating-point luck.
+  `offsetToCube()` had to be exported for this; `cubeToOffset()` is new.
+- **The whole map moved from mouse events to pointer events.** Freehand drawing has to work with a
+  finger on a tablet at the table, and Pointer Events cover mouse, touch and stylus in one code path
+  rather than two. GM hex-clicking and paint mode went along with it and gained touch support for
+  free. Pointer capture keeps a stroke recording when the finger leaves the canvas mid-drag, and the
+  in-progress line is redrawn on a `requestAnimationFrame` rather than on every `pointermove`.
+- **The Wits panel's "Shield" box is computed now, and `parryShield` is out of the sum.**
+  `totalParry()` was adding the equipped shield's Parry *and* the typed `parryShield` field — correct
+  only because that field had been zeroed on every sheet by hand in an earlier round, and visibly
+  wrong: Base 19 + Shield 0 + Other 0 + Stance 0 read as 19 under a Total Parry of 20. The box now
+  displays `shieldParryBonus()` read-only (the same "computed, not editable" treatment Load and the
+  Target Number get) and the stored field is no longer summed. **The schema field stays**, unused, so
+  `hydrateSheet()`'s forward-merge keeps working on old sheets — nothing reads it, so a stale value
+  cannot reintroduce the double count, and there is a test asserting exactly that.
+- **Useful Items are surfaced at the roll, not wired into it.** They were never in the dice engine;
+  the real gap was that they only existed on the sheet's own table, which is the one place nobody is
+  looking when they roll. The roll dialog now lists any Useful Item naming that skill, next to the
+  Flat bonus field — because per the rulebook the bonus is the GM's call in the moment, not a standing
+  modifier. Informational only: the pool count under the Roll button does not change.
+- **The Culture dropdown's options are derived from the Cultural Virtues.** `CULTURAL_VIRTUE_CULTURES`
+  used to be a hand-written list sitting next to the 60 rows it summarised; it is now
+  `[...new Set(CULTURAL_VIRTUES.map(v => v.culture))]`, and the character sheet imports that rather
+  than typing the ten cultures a third time. A dropdown offering a culture the Virtue picker cannot
+  match is now impossible by construction, and there is a test for it.
+- **A stored value that is not on a dropdown stays selectable rather than blanking.** A strict
+  `<select>` shows nothing when its value matches no option — and would then wipe the field on the
+  next save. Culture, Calling and Living Standard all carry any unrecognised stored value through as
+  its own option, labelled "(not on the list)", so a home-brew culture survives contact with the
+  dropdown.
+- **The Culture data fix is a script, matched by name, and "Bree Hobbits" is a guess.**
+  `scripts/fixCultures.js` corrects three roster spellings: `Beorning` → `Beornings` and
+  `Dwarves of Durin` → `Dwarves of Durin's Folk` are unambiguous. ⚠️ **`Hobbit of Bree` →
+  `Bree Hobbits` is a judgment call, not a certainty** — it is the closest canonical culture and its
+  own Cultural Virtue text describes it as the hybrid Men-of-Bree / Hobbit-of-the-Shire culture, which
+  fits, but "a Hobbit of the Shire living in Bree" is a defensible alternative reading. It is two
+  clicks to change on the sheet. The script is idempotent, only touches a row whose name AND current
+  value both match, refuses to write a value the dropdown could not show, and has a `--dry-run`.
+- **Adventure Notes get their own tab rather than sharing the Handouts page.** Both are Year/Season
+  scoped and that is where the resemblance stops: Handouts are GM-written, hidden until revealed, and
+  image-first; Adventure Notes are open to anyone with the player passcode, have no hidden concept at
+  all, and are text. One page juggling two permission models would be harder to read than two pages.
+- **Adventure Notes are one entry per Year + Season, upserted — not a list.** A unique index on
+  (year, season) and a single `PUT /notes/:year/:season`, because the page has no create step: you
+  pick a season and start typing. Following the Handouts pattern of create-then-patch would have meant
+  inventing a "new note" button for something there can only ever be one of.
 - **`pool.end()` isn't awaited before `process.exit()` in the seed scripts and `migrate.js`'s CLI
   entry point.** `process.exit()` terminates the process immediately regardless of open handles, and
   awaiting a graceful Postgres pool shutdown first was measured hanging for 60+ seconds against
@@ -353,10 +470,11 @@ Things the spec left open, and what was chosen:
 
 ## Not in v1
 
-Combat tracker, NPC/bestiary database, session notes, a full Discord bot, individual user accounts,
-and a native mobile app are all deliberately out of scope (spec §8). The nav, routing and data layer
-already leave room: `client/src/App.jsx` has a data-driven `NAV` array with placeholder routes, so
-adding one means writing a page component and flipping a flag.
+Combat tracker, NPC/bestiary database, a full Discord bot, individual user accounts, and a native
+mobile app are all deliberately out of scope (spec §8). The nav, routing and data layer already leave
+room: `client/src/App.jsx` has a data-driven `NAV` array with placeholder routes, so adding one means
+writing a page component and flipping a flag — which is how Handouts, the Compendium and now
+Adventure Notes (the spec's "session notes") each stopped being a placeholder.
 
 The Compendium leaves the same room. Its sections are declared as data in
 `shared/compendium.js` (`COMPENDIUM_SECTIONS`) and in `COMPENDIUM_TABLES` in `server/lib/store.js`,

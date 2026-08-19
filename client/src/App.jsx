@@ -10,13 +10,15 @@ import Journeys from './pages/Journeys.jsx';
 import JourneyDetail from './pages/JourneyDetail.jsx';
 import Compendium from './pages/Compendium.jsx';
 import Handouts from './pages/Handouts.jsx';
+import AdventureNotes from './pages/AdventureNotes.jsx';
 import ComingSoon from './pages/ComingSoon.jsx';
 import TurnPrompt from './components/TurnPrompt.jsx';
 
 /**
- * Nav is data-driven so the v2 sections (combat tracker, bestiary, session
- * notes) can be switched on by swapping `soon: true` for a real component —
- * no layout or routing rewrite needed.
+ * Nav is data-driven so the v2 sections (combat tracker, bestiary) can be
+ * switched on by swapping `soon: true` for a real component — no layout or
+ * routing rewrite needed. Handouts, the Compendium and now Adventure Notes were
+ * all promoted out of "Later" that way.
  */
 const NAV = [
   { section: 'Campaign' },
@@ -24,6 +26,7 @@ const NAV = [
   { to: '/characters', label: 'Characters' },
   { to: '/compendium', label: 'Compendium' },
   { to: '/handouts', label: 'Handouts' },
+  { to: '/notes', label: 'Adventure Notes' },
   { section: 'Travel' },
   { to: '/map', label: 'Map & Travel' },
   { to: '/journeys', label: 'Journey Log' },
@@ -32,7 +35,6 @@ const NAV = [
   { section: 'Later' },
   { to: '/combat', label: 'Combat Tracker', soon: true },
   { to: '/bestiary', label: 'Bestiary & NPCs', soon: true },
-  { to: '/notes', label: 'Session Notes', soon: true },
 ];
 
 /**
@@ -151,6 +153,7 @@ export default function App() {
           <Route path="/characters/:id" element={<CharacterSheet />} />
           <Route path="/compendium" element={<Compendium />} />
           <Route path="/handouts" element={<Handouts />} />
+          <Route path="/notes" element={<AdventureNotes />} />
           <Route path="/map" element={<MapView />} />
           <Route
             path="/calibration"
@@ -164,7 +167,6 @@ export default function App() {
           <Route path="/journeys/:id" element={<JourneyDetail />} />
           <Route path="/combat" element={<ComingSoon title="Combat Tracker" />} />
           <Route path="/bestiary" element={<ComingSoon title="Bestiary & NPCs" />} />
-          <Route path="/notes" element={<ComingSoon title="Session Notes" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

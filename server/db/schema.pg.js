@@ -274,6 +274,21 @@ export const handouts = pgTable(
   (t) => ({ byWhen: index('handouts_year_season_idx').on(t.year, t.season) }),
 );
 
+/** One entry per Year + Season. See schema.js for why it is not a list. */
+export const adventureNotes = pgTable(
+  'adventure_notes',
+  {
+    id: text('id').primaryKey(),
+    year: integer('year').notNull().default(0),
+    season: text('season').notNull().default('Spring'),
+    title: text('title').notNull().default(''),
+    body: text('body').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => ({ onedPerWhen: uniqueIndex('adventure_notes_year_season_idx').on(t.year, t.season) }),
+);
+
 export const travelState = pgTable('travel_state', {
   id: text('id').primaryKey(),
   journeyId: text('journey_id'),

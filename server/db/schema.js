@@ -286,6 +286,31 @@ export const handouts = sqliteTable(
   (t) => ({ byWhen: index('handouts_year_season_idx').on(t.year, t.season) }),
 );
 
+/**
+ * Adventure Notes — the table's shared scratchpad, ONE entry per Year + Season.
+ *
+ * Not a list like `handouts`: a season has a single running note, so
+ * (year, season) is the entry's identity and carries a unique index. The route
+ * upserts on it rather than exposing create/update separately, which is what
+ * makes "pick a season, start typing" work whether or not anything is there.
+ *
+ * No `hidden` column, deliberately — unlike a handout this is open to anyone
+ * with the player passcode, the same access level as a character sheet.
+ */
+export const adventureNotes = sqliteTable(
+  'adventure_notes',
+  {
+    id: text('id').primaryKey(),
+    year: integer('year').notNull().default(0),
+    season: text('season').notNull().default('Spring'),
+    title: text('title').notNull().default(''),
+    body: text('body').notNull().default(''),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => ({ onedPerWhen: uniqueIndex('adventure_notes_year_season_idx').on(t.year, t.season) }),
+);
+
 /** The in-progress travel sequence state machine (spec §6d). */
 export const travelState = sqliteTable('travel_state', {
   id: text('id').primaryKey(), // always 'singleton'

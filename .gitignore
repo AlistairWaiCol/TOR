@@ -4,6 +4,10 @@ dist/
 *.log
 npm-debug.log*
 
+# Local Claude Code dev-server tooling config — session/environment-specific,
+# not part of the app.
+.claude/
+
 # Local SQLite database
 data/*.db
 data/*.db-journal

@@ -256,6 +256,82 @@ export function computeJourneyDays({
 }
 
 /**
+ * The day-by-day tick sequence for ONE leg of a journey, for the live travel
+ * animation (the box that counts "Day 1 … Day 4 — Event" while the party token
+ * walks the hexes).
+ *
+ * `computeJourneyDays()` above is the authoritative maths, but it only produces
+ * AGGREGATES — total hexes, total hard-terrain hexes, one forced-march flag. It
+ * cannot say *when* each day is spent, which is the whole point of an
+ * animation. This is that per-hex breakdown, and the tests assert its day total
+ * against `computeJourneyDays()` for the same inputs so the two cannot drift.
+ *
+ * Pacing, from the brief and §6g:
+ *   normal hex        move + 1 day
+ *   hard-terrain hex  move + 1 day, then a SECOND day with no movement
+ *   Forced March      1 day per 2 hexes: move (no day), then move + 1 day
+ *
+ * **Judgment call — a hard-terrain hex inside a Forced March pair.** Neither
+ * the rulebook nor the brief says which rule wins. The two are applied
+ * independently and additively: the pair still increments once for its two
+ * hexes of movement, and the hard-terrain hex still adds its own extra day on
+ * top. That is what `computeJourneyDays()` already does with the aggregates
+ * (`ceil(hexes / 2) + hardTerrainHexes`), so any other reading would make the
+ * live counter disagree with the logged total.
+ *
+ * Deliberately NOT modelled here: the mounted halving. That is a final-total
+ * adjustment applied once at the end of the journey, so on a mounted journey
+ * the live counter legitimately runs ahead of the number that gets logged.
+ *
+ * A journey is animated one leg at a time, but the day counter and the Forced
+ * March pairing are both JOURNEY-wide: `startDay` carries the running total in,
+ * and `startHexIndex` carries how many hexes have already been walked, so a
+ * pair is never restarted just because a leg boundary fell inside it. `finalLeg`
+ * says this leg ends at the destination, which is what lets a lone trailing hex
+ * still cost its day (`ceil(n / 2)`, not `floor(n / 2)`).
+ *
+ * @param {object} opts
+ * @param {Array<{col:number,row:number}>} opts.path hexes ENTERED this leg, in order
+ * @param {(hex: {col:number,row:number}, index: number) => boolean} [opts.isHardTerrain]
+ *        `index` is the journey-wide hex index, not the index within this leg
+ * @param {boolean} [opts.forcedMarch]
+ * @param {number} [opts.startDay] the journey-wide day count so far
+ * @param {number} [opts.startHexIndex] hexes already traversed on this journey
+ * @param {boolean} [opts.finalLeg] this leg reaches the destination
+ * @returns {Array<{hex: object, day: number, moved: boolean, hardTerrain: boolean}>}
+ */
+export function journeyTickSequence({
+  path = [],
+  isHardTerrain = () => false,
+  forcedMarch = false,
+  startDay = 0,
+  startHexIndex = 0,
+  finalLeg = true,
+} = {}) {
+  const steps = [];
+  let day = Math.max(0, Number(startDay) || 0);
+  const offset = Math.max(0, Number(startHexIndex) || 0);
+
+  path.forEach((hex, i) => {
+    const index = offset + i; // journey-wide, 0-based
+    const hard = Boolean(isHardTerrain(hex, index));
+    // Forced March spends its day on the SECOND hex of each pair — and on the
+    // journey's final hex if that leaves a pair half-finished, which is what
+    // makes the total ceil(n / 2) rather than floor(n / 2).
+    const lastOfJourney = finalLeg && i === path.length - 1;
+    const spendsMarchDay = !forcedMarch || index % 2 === 1 || lastOfJourney;
+    if (spendsMarchDay) day += 1;
+    steps.push({ hex, day, moved: true, hardTerrain: hard });
+    if (hard) {
+      day += 1;
+      steps.push({ hex, day, moved: false, hardTerrain: true });
+    }
+  });
+
+  return steps;
+}
+
+/**
  * End-of-journey Fatigue relief for one hero (§6g).
  * Mount Vigour reduces accumulated Fatigue first, then a TRAVEL roll reduces it
  * further (success = -1, and a further -1 per Success icon).

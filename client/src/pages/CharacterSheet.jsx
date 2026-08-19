@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ATTRIBUTES,
+  CALLINGS,
+  LIVING_STANDARDS,
   PROFICIENCY_GROUPS,
   STANCES,
   computeWeary,
@@ -9,12 +11,14 @@ import {
   emptyArmour,
   emptyUsefulItem,
   emptyWeapon,
+  shieldParryBonus,
   stanceAttackDice,
   stanceAttackNote,
   stanceAttackWarning,
   totalLoad,
   totalParry,
   totalProtection,
+  usefulItemsForSkill,
 } from '@shared/character.js';
 import { isCharacterTravelling } from '@shared/journey.js';
 import {
@@ -25,7 +29,7 @@ import {
   isVersatileWeapon,
   standardOfLivingWarning,
 } from '@shared/compendium.js';
-import { culturalVirtuesFor } from '@shared/culturalVirtues.js';
+import { CULTURAL_VIRTUE_CULTURES, culturalVirtuesFor } from '@shared/culturalVirtues.js';
 import { computeTargetNumber } from '@shared/dice.js';
 import { ARMOUR_QUALITIES, SHIELD_QUALITIES, WEAPON_QUALITIES, effectiveWeapon } from '@shared/rewards.js';
 import { api } from '../lib/api.js';
@@ -109,6 +113,23 @@ function GearHint({ hint, where, onDismiss }) {
       </button>
     </div>
   );
+}
+
+/**
+ * Options for a `<select>` over a fixed list, keeping whatever the sheet
+ * already holds selectable even if it is not on the list.
+ *
+ * A strict `<select>` shows blank when its value matches no option, which would
+ * make a home-brew or legacy Culture look like it had been wiped — and would
+ * wipe it for real the moment anything else on the sheet was saved. Carrying
+ * the stored value through as its own option keeps the dropdown honest about
+ * what the sheet actually says.
+ */
+function optionsWithStored(list, current) {
+  const value = String(current ?? '');
+  const options = [{ value: '', label: '— none —' }, ...list];
+  if (value && !list.includes(value)) options.push({ value, label: `${value} (not on the list)` });
+  return options;
 }
 
 function setIn(obj, path, value) {
@@ -261,6 +282,9 @@ export default function CharacterSheet() {
   const valour = sheet.rewards.valour;
   const protection = totalProtection(sheet);
   const parry = totalParry(sheet);
+  // The equipped shield's own contribution — displayed in the Wits panel's
+  // Shield box so Base + Shield + Other + Stance visibly sums to Total Parry.
+  const shieldBonus = shieldParryBonus(sheet);
   // Load and Weary are derived on every render, never stored — equip a weapon or
   // change a quality tier and both update immediately.
   const load_ = totalLoad(sheet);
@@ -305,6 +329,7 @@ export default function CharacterSheet() {
         `TN = your STRENGTH TN (${strengthTN}) + the target's Parry. ${stanceAttackNote(sheet)}` +
         (extraNote ? ` ${extraNote}` : ''),
       warning: stanceAttackWarning(sheet, weapon ?? { proficiency: group }),
+      usefulItems: usefulItemsForSkill(sheet, group),
       ...conditionFlags,
     });
   };
@@ -322,6 +347,9 @@ export default function CharacterSheet() {
       targetNumber: computeTargetNumber(attr.rating, tnBase),
       favoured: entry.favoured || sheet.conditions.favourState === 'Favoured',
       illFavoured: sheet.conditions.favourState === 'Ill-Favoured',
+      // Reference only. A Useful Item's bonus is the GM's call in the moment,
+      // so it is shown beside the Flat bonus field, never added to anything.
+      usefulItems: usefulItemsForSkill(sheet, skillName),
       ...conditionFlags,
     });
   };
@@ -346,12 +374,28 @@ export default function CharacterSheet() {
         <h2>General</h2>
         <div className="grid g3">
           <TextField label="Name" value={sheet.general.name} onChange={(v) => update(['general', 'name'], v)} />
-          <TextField label="Culture" value={sheet.general.culture} onChange={(v) => update(['general', 'culture'], v)} />
-          <TextField label="Calling" value={sheet.general.calling} onChange={(v) => update(['general', 'calling'], v)} />
-          <TextField
+          {/* Culture's options come from the Cultural Virtues themselves, so
+              the dropdown and the Virtue picker below can never disagree about
+              what the ten cultures are. A stored value that is not one of them
+              (a home-brew culture, or a pre-dropdown spelling) is kept as its
+              own option rather than silently blanked. */}
+          <SelectField
+            label="Culture"
+            value={sheet.general.culture}
+            onChange={(v) => update(['general', 'culture'], v)}
+            options={optionsWithStored(CULTURAL_VIRTUE_CULTURES, sheet.general.culture)}
+          />
+          <SelectField
+            label="Calling"
+            value={sheet.general.calling}
+            onChange={(v) => update(['general', 'calling'], v)}
+            options={optionsWithStored(CALLINGS, sheet.general.calling)}
+          />
+          <SelectField
             label="Living Standard"
             value={sheet.general.livingStandard}
             onChange={(v) => update(['general', 'livingStandard'], v)}
+            options={optionsWithStored(LIVING_STANDARDS, sheet.general.livingStandard)}
           />
           <TextField label="Weakness" value={sheet.general.weakness} onChange={(v) => update(['general', 'weakness'], v)} />
           <TextField label="Patron" value={sheet.general.patron} onChange={(v) => update(['general', 'patron'], v)} />
@@ -541,7 +585,21 @@ export default function CharacterSheet() {
                 {attr.key === 'wits' ? (
                   <>
                     <NumField label="Parry base" value={a.parryBase} onChange={(v) => update(['attributes', 'wits', 'parryBase'], v)} />
-                    <NumField label="Shield" value={a.parryShield} onChange={(v) => update(['attributes', 'wits', 'parryShield'], v)} />
+                    {/* Computed from the equipped shield, not typed: this used
+                        to be a manual box that was ALSO added on top of the
+                        shield the sheet already knew about. Same "computed, not
+                        editable" treatment Load and the Target Number get. */}
+                    <label
+                      className="field"
+                      title={
+                        sheet.shield.equipped
+                          ? `Computed from the equipped shield (${sheet.shield.name || 'unnamed'}): Parry Modifier ${sheet.shield.parry}${shieldBonus - (Number(sheet.shield.parry) || 0) ? ` +${shieldBonus - (Number(sheet.shield.parry) || 0)} Reinforced` : ''}.`
+                          : 'No shield equipped — set one in the Armour & Shield table below.'
+                      }
+                    >
+                      <span>Shield</span>
+                      <input type="number" value={shieldBonus} readOnly disabled />
+                    </label>
                     <NumField label="Other" value={a.parryOther} onChange={(v) => update(['attributes', 'wits', 'parryOther'], v)} />
                     <NumField label="Stance" value={a.parryStance} onChange={(v) => update(['attributes', 'wits', 'parryStance'], v)} />
                   </>
@@ -687,8 +745,9 @@ export default function CharacterSheet() {
                 + item
               </button>
               <p className="small muted">
-                A Bonus is a flat modifier — enter it in the roll dialog's "Flat bonus" field when the
-                item applies.
+                Naming a skill here makes the item show up as a reminder in the roll dialog for that
+                skill. The bonus is never applied automatically — a Useful Item helps when the GM
+                rules it is relevant, so it goes in the dialog's "Flat bonus" field by hand.
               </p>
             </>
           ) : (

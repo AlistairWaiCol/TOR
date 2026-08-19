@@ -183,6 +183,18 @@ const SQLITE_STATEMENTS = [
    )`,
   `CREATE INDEX IF NOT EXISTS handouts_year_season_idx ON handouts (year, season)`,
 
+  `CREATE TABLE IF NOT EXISTS adventure_notes (
+     id TEXT PRIMARY KEY,
+     year INTEGER NOT NULL DEFAULT 0,
+     season TEXT NOT NULL DEFAULT 'Spring',
+     title TEXT NOT NULL DEFAULT '',
+     body TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS adventure_notes_year_season_idx
+     ON adventure_notes (year, season)`,
+
   `CREATE TABLE IF NOT EXISTS travel_state (
      id TEXT PRIMARY KEY,
      journey_id TEXT,
@@ -451,6 +463,18 @@ const PG_STATEMENTS = [
      updated_at TEXT NOT NULL DEFAULT (${PG_NOW})
    )`,
   `CREATE INDEX IF NOT EXISTS handouts_year_season_idx ON handouts (year, season)`,
+
+  `CREATE TABLE IF NOT EXISTS adventure_notes (
+     id TEXT PRIMARY KEY,
+     year INTEGER NOT NULL DEFAULT 0,
+     season TEXT NOT NULL DEFAULT 'Spring',
+     title TEXT NOT NULL DEFAULT '',
+     body TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL DEFAULT (${PG_NOW}),
+     updated_at TEXT NOT NULL DEFAULT (${PG_NOW})
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS adventure_notes_year_season_idx
+     ON adventure_notes (year, season)`,
 
   `CREATE TABLE IF NOT EXISTS travel_state (
      id TEXT PRIMARY KEY,

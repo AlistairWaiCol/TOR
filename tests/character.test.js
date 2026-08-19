@@ -6,6 +6,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  CALLINGS,
+  LIVING_STANDARDS,
   RANGED_PROFICIENCY,
   attackTargetNumber,
   computeWeary,
@@ -13,10 +15,18 @@ import {
   emptyCharacterSheet,
   hydrateSheet,
   rollContextForSkill,
+  shieldParryBonus,
   stanceAttackDice,
   stanceAttackWarning,
   totalLoad,
+  totalParry,
+  usefulItemsForSkill,
 } from '../shared/character.js';
+import {
+  CULTURAL_VIRTUES,
+  CULTURAL_VIRTUE_CULTURES,
+  culturalVirtuesFor,
+} from '../shared/culturalVirtues.js';
 import { isCharacterTravelling } from '../shared/journey.js';
 import { SHORT_CAMPAIGN_TN_BASE } from '../shared/dice.js';
 
@@ -237,5 +247,155 @@ describe('who counts as actively travelling', () => {
   it('falls back to everyone when no roles were assigned', () => {
     const travel = { journeyId: 'j1', phase: 'awaiting_marching_test' };
     assert.equal(isCharacterTravelling({ travel, journey: { roles: {} }, characterId: 'zz' }), true);
+  });
+});
+
+/* --- Parry -------------------------------------------------------------------
+ * The Wits panel's Shield sub-field used to be a manual box that was added to
+ * the total ON TOP OF the equipped shield the sheet already knew about. The
+ * field is computed now and the stored one is out of the sum entirely.
+ */
+
+describe('Total Parry', () => {
+  const withShield = (shield, patch = {}) => sheetWith({ shield, ...patch });
+
+  it('adds the equipped shield once, from the shield itself', () => {
+    const sheet = withShield(
+      { equipped: true, name: 'Shield', parry: 2, load: 4, reinforced: 'none', cunningMake: 'none' },
+      { attributes: { wits: { parryBase: 19 } } },
+    );
+    assert.equal(shieldParryBonus(sheet), 2);
+    assert.equal(totalParry(sheet), 21);
+  });
+
+  it('includes the Reinforced tier in the shield contribution', () => {
+    const sheet = withShield({ equipped: true, parry: 2, reinforced: 'standard' });
+    assert.equal(shieldParryBonus(sheet), 3);
+    const enhanced = withShield({ equipped: true, parry: 2, reinforced: 'enhanced' });
+    assert.equal(shieldParryBonus(enhanced), 4);
+  });
+
+  it('contributes nothing while the shield is unequipped', () => {
+    const sheet = withShield(
+      { equipped: false, parry: 2, reinforced: 'standard' },
+      { attributes: { wits: { parryBase: 19 } } },
+    );
+    assert.equal(shieldParryBonus(sheet), 0);
+    assert.equal(totalParry(sheet), 19);
+  });
+
+  it('ignores the vestigial parryShield field entirely — no double count', () => {
+    const shield = { equipped: true, parry: 2, reinforced: 'none', cunningMake: 'none' };
+    const clean = withShield(shield, { attributes: { wits: { parryBase: 19, parryShield: 0 } } });
+    // An old sheet that still carries a hand-typed value must read the same.
+    const legacy = withShield(shield, { attributes: { wits: { parryBase: 19, parryShield: 2 } } });
+    assert.equal(totalParry(clean), 21);
+    assert.equal(totalParry(legacy), 21, 'a stale parryShield must not be added again');
+  });
+
+  it('sums exactly what the panel displays: base + shield + other + stance', () => {
+    const sheet = withShield(
+      { equipped: true, parry: 1, reinforced: 'standard' },
+      { attributes: { wits: { parryBase: 18, parryOther: 3, parryStance: -1 } } },
+    );
+    const w = sheet.attributes.wits;
+    assert.equal(
+      totalParry(sheet),
+      w.parryBase + shieldParryBonus(sheet) + w.parryOther + w.parryStance,
+    );
+    assert.equal(totalParry(sheet), 22);
+  });
+});
+
+/* --- Useful Items ------------------------------------------------------------
+ * Reference data for the roll dialog only. Nothing in the dice engine reads it.
+ */
+
+describe('usefulItemsForSkill', () => {
+  const withItems = (items, useTable = true) => sheetWith({ usefulItems: { useTable, items } });
+
+  it('matches either of an item\'s two skill slots', () => {
+    const sheet = withItems([
+      { name: 'Fine pipe', bonus: 1, skill1: 'Insight', skill2: '' },
+      { name: 'Whetstone', bonus: 2, skill1: 'Craft', skill2: 'Battle' },
+    ]);
+    assert.deepEqual(usefulItemsForSkill(sheet, 'Insight').map((i) => i.name), ['Fine pipe']);
+    assert.deepEqual(usefulItemsForSkill(sheet, 'Battle').map((i) => i.name), ['Whetstone']);
+    assert.deepEqual(usefulItemsForSkill(sheet, 'Craft').map((i) => i.name), ['Whetstone']);
+  });
+
+  it('matches the free-text skill names case- and space-insensitively', () => {
+    const sheet = withItems([{ name: 'Rope', bonus: 1, skill1: '  athletics ', skill2: '' }]);
+    assert.equal(usefulItemsForSkill(sheet, 'Athletics').length, 1);
+    assert.equal(usefulItemsForSkill(sheet, 'ATHLETICS').length, 1);
+  });
+
+  it('returns every item that names the skill, not just the first', () => {
+    const sheet = withItems([
+      { name: 'Rope', bonus: 1, skill1: 'Athletics', skill2: '' },
+      { name: 'Climbing irons', bonus: 2, skill1: 'Athletics', skill2: '' },
+    ]);
+    assert.equal(usefulItemsForSkill(sheet, 'Athletics').length, 2);
+  });
+
+  it('skips half-filled rows — no name, or no bonus to award', () => {
+    const sheet = withItems([
+      { name: '', bonus: 2, skill1: 'Lore', skill2: '' },
+      { name: 'Blank ledger', bonus: 0, skill1: 'Lore', skill2: '' },
+    ]);
+    assert.deepEqual(usefulItemsForSkill(sheet, 'Lore'), []);
+  });
+
+  it('is empty for an unrelated skill, a blank skill, and the plain gear box', () => {
+    const items = [{ name: 'Fine pipe', bonus: 1, skill1: 'Insight', skill2: '' }];
+    assert.deepEqual(usefulItemsForSkill(withItems(items), 'Stealth'), []);
+    assert.deepEqual(usefulItemsForSkill(withItems(items), ''), []);
+    assert.deepEqual(usefulItemsForSkill(withItems(items, false), 'Insight'), []);
+  });
+
+  it('changes nothing about the roll context — it is reference data only', () => {
+    const sheet = withItems([{ name: 'Fine pipe', bonus: 1, skill1: 'Insight', skill2: '' }]);
+    const bare = sheetWith({});
+    const ctx = rollContextForSkill(sheet, 'Insight');
+    assert.deepEqual(ctx, rollContextForSkill(bare, 'Insight'));
+  });
+});
+
+/* --- General panel dropdowns ------------------------------------------------- */
+
+describe('Culture / Calling / Living Standard option lists', () => {
+  it('offers the six Callings and six Standards of Living', () => {
+    assert.equal(CALLINGS.length, 6);
+    assert.ok(CALLINGS.includes('Treasure Hunter'));
+    assert.equal(LIVING_STANDARDS.length, 6);
+    assert.deepEqual(LIVING_STANDARDS, ['Poor', 'Frugal', 'Common', 'Prosperous', 'Rich', 'Very Rich']);
+  });
+
+  it('derives the ten cultures from the Cultural Virtues, not a second copy', () => {
+    assert.equal(CULTURAL_VIRTUE_CULTURES.length, 10);
+    assert.deepEqual(
+      CULTURAL_VIRTUE_CULTURES,
+      [...new Set(CULTURAL_VIRTUES.map((v) => v.culture))],
+    );
+  });
+
+  it('gives every dropdown Culture a matching set of Cultural Virtues', () => {
+    // The dropdown existing and the Virtue picker finding nothing would be the
+    // exact drift deriving the list is meant to make impossible.
+    for (const culture of CULTURAL_VIRTUE_CULTURES) {
+      assert.ok(culturalVirtuesFor(culture).length > 0, culture);
+    }
+  });
+
+  it('keeps the migrated roster values selectable', () => {
+    // The three corrections scripts/fixCultures.js applies.
+    for (const culture of ['Beornings', "Dwarves of Durin's Folk", 'Bree Hobbits', 'Elves of Mirkwood']) {
+      assert.ok(CULTURAL_VIRTUE_CULTURES.includes(culture), culture);
+    }
+    // ...and the pre-migration spellings are NOT options, which is why the
+    // migration is needed at all.
+    for (const stale of ['Beorning', 'Dwarves of Durin', 'Hobbit of Bree']) {
+      assert.equal(CULTURAL_VIRTUE_CULTURES.includes(stale), false, stale);
+    }
   });
 });

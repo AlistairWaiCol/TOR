@@ -33,6 +33,34 @@ export function RollProvider({ children }) {
   );
 }
 
+/**
+ * Useful Items the rolling hero owns that name this skill.
+ *
+ * A reminder, not a modifier. Per the core rulebook a Useful Item's bonus is
+ * awarded by the GM when the item is narratively relevant to the roll being
+ * made — not a standing plus on every roll of that skill — so this sits next to
+ * the Flat bonus field and adds nothing to the pool on its own, the same way a
+ * Hope spend is offered as a choice rather than applied automatically.
+ *
+ * Before this the bonuses only existed on the character sheet's own Useful
+ * Items table, which is exactly where nobody is looking at the moment of a roll.
+ */
+function UsefulItemNote({ items }) {
+  if (!items?.length) return null;
+  return (
+    <div className="info-box" style={{ marginTop: 4 }}>
+      <strong>Useful Items that could apply:</strong>{' '}
+      {items
+        .map((i) => `${i.name} ${Number(i.bonus) > 0 ? '+' : ''}${Number(i.bonus)}`)
+        .join(' · ')}
+      <div className="small muted">
+        GM's discretion — if the item fits what is being attempted, add its bonus in "Flat bonus"
+        above. Nothing is applied automatically.
+      </div>
+    </div>
+  );
+}
+
 function RollModal({ config, onClose }) {
   // Attack rolls take the target's Parry rather than a raw TN: in TOR 2e an
   // attack's Target Number is the attacker's STRENGTH TN raised by the target's
@@ -176,7 +204,12 @@ function RollModal({ config, onClose }) {
                 onChange={set('extraDice')}
                 title="e.g. hard terrain −1, road +1"
               />
-              <NumField label="Flat bonus" value={form.bonus} onChange={set('bonus')} />
+              <NumField
+                label="Flat bonus"
+                value={form.bonus}
+                onChange={set('bonus')}
+                title="Where a Useful Item's bonus goes, if the GM rules it applies"
+              />
               <SelectField
                 label="Visible to"
                 value={form.whisperTo}
@@ -184,6 +217,8 @@ function RollModal({ config, onClose }) {
                 options={whisperOptions}
               />
             </div>
+
+            <UsefulItemNote items={config.usefulItems} />
 
             {config.characterId ? (
               <div className="row" style={{ margin: '4px 0 12px' }}>

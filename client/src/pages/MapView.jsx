@@ -16,6 +16,7 @@ import { saveJourneyMap } from '../lib/journeyMap.js';
 import { getSocket } from '../lib/socket.js';
 import { useApp } from '../state/AppContext.jsx';
 import HexMap from '../components/HexMap.jsx';
+import TravelDayTicker, { useTravelDayTicker } from '../components/TravelDayTicker.jsx';
 import { CheckField, SelectField, TextField } from '../components/Fields.jsx';
 import DiceResult from '../components/DiceResult.jsx';
 
@@ -131,6 +132,20 @@ export default function MapView() {
     });
   };
 
+  /**
+   * A freehand line finished. The raw trail goes to the server in
+   * original-image pixel coordinates and comes back as an ordinary hex route —
+   * same data structure the click tool writes, so locking, clearing and
+   * Marching Test distance counting all behave identically.
+   */
+  const drawFreehandRoute = (points) => {
+    if (party?.routeLocked && !isGM) {
+      setError('The route is locked by the GM.');
+      return;
+    }
+    call(() => api.post('/party/draw-route', { points }));
+  };
+
   const onHexClick = (hx) => {
     if (clickMode === 'inspect') {
       setInspect(hexIndex.get(hexKey(hx.col, hx.row)) ?? { ...hx, regionType: 'wild', untagged: true });
@@ -167,6 +182,12 @@ export default function MapView() {
       ? { col: party.currentCol, row: party.currentRow }
       : null;
 
+  // The live day-by-day animation. While a leg is playing out the token sits on
+  // an intermediate hex rather than the leg's end — `animatedHex` is what the
+  // map is fed, falling back to the real position when nothing is in flight.
+  const ticker = useTravelDayTicker({ journey, hexes });
+  const animatedHex = ticker.playing ? ticker.hex : null;
+
   return (
     <>
       <div className="page-head">
@@ -190,16 +211,25 @@ export default function MapView() {
       <div className="map-shell">
         <div style={{ flex: '1 1 560px', minWidth: 320 }}>
           <div className="row" style={{ marginBottom: 8 }}>
-            <SelectField
-              label=""
-              value={clickMode}
-              onChange={setClickMode}
-              options={[
-                { value: 'route', label: 'Click: draw route' },
-                { value: 'inspect', label: 'Click: inspect hex' },
-                ...(isGM && journey ? [{ value: 'pin', label: 'Click: pin next event (GM)' }] : []),
-              ]}
-            />
+            {/* Click modes are the GM's tool. A player draws freehand, on a map
+                with no grid on it, so there is nothing to click and nothing to
+                choose between. */}
+            {isGM ? (
+              <SelectField
+                label=""
+                value={clickMode}
+                onChange={setClickMode}
+                options={[
+                  { value: 'route', label: 'Click: draw route' },
+                  { value: 'inspect', label: 'Click: inspect hex' },
+                  ...(journey ? [{ value: 'pin', label: 'Click: pin next event (GM)' }] : []),
+                ]}
+              />
+            ) : (
+              <span className="pill gold" title="Drag across the map to draw a route">
+                drag to draw a route
+              </span>
+            )}
             <SelectField
               label=""
               value={tier}
@@ -213,7 +243,9 @@ export default function MapView() {
               <span>Zoom {zoom.toFixed(2)}×</span>
               <input type="range" min="0.35" max="2.2" step="0.05" value={zoom} onChange={(e) => setZoom(Number(e.target.value))} />
             </label>
-            <CheckField label="grid" checked={showGrid} onChange={setShowGrid} />
+            {/* The grid is a GM affordance now: it exists so hexes can be
+                clicked and tagged. Players draw freehand and never see it. */}
+            {isGM ? <CheckField label="grid" checked={showGrid} onChange={setShowGrid} /> : null}
           </div>
 
           <div style={{ position: 'relative' }} ref={mapWrapRef}>
@@ -222,17 +254,22 @@ export default function MapView() {
               hexes={hexes}
               tier={tier}
               zoom={zoom}
-              showGrid={showGrid}
+              // Players get no grid at all — not a toggle they happen to have
+              // switched off. Their route tool is freehand, so hex boundaries
+              // are an implementation detail they should never have to see.
+              showGrid={isGM ? showGrid : false}
               // Hex tagging (region colour, hard terrain, roads, Perilous
-              // Areas, labels) is GM prep — players get the plain map, the grid
-              // lines they need to click a route, the party token and the route.
+              // Areas, labels) is GM prep — players get the plain map art, the
+              // party token and the route.
               showTags={isGM}
               route={route}
-              currentHex={currentPos}
+              currentHex={animatedHex ?? currentPos}
               pinHex={tstate.manualPin ?? null}
               selected={inspect && !inspect.untagged ? inspect : null}
-              onHexClick={onHexClick}
+              onHexClick={isGM ? onHexClick : undefined}
               onHexHover={onHexHover}
+              freehand={!isGM}
+              onFreehandPath={drawFreehandRoute}
             />
             {hoverLocation ? (
               <div
@@ -260,23 +297,36 @@ export default function MapView() {
           <div className="row" style={{ marginTop: 8 }}>
             <span className="small muted">
               {route.length
-                ? `Route: ${route.length} hexes (${route.length - 1} legs). Click the last hex again to undo.`
-                : 'Click hexes to draw a proposed route — everyone sees it live.'}
+                ? `Route: ${route.length} hexes (${route.length - 1} legs).${isGM ? ' Click the last hex again to undo.' : ''}`
+                : isGM
+                  ? 'Click hexes to draw a proposed route — everyone sees it live.'
+                  : 'Drag a line across the map to draw a proposed route — everyone sees it live.'}
             </span>
+            {party?.routeLocked ? <span className="pill gold">locked by the GM</span> : null}
             <div className="spacer" />
             {isGM ? (
-              <>
-                <button
-                  className="small"
-                  onClick={() => call(() => api.patch('/party', { routeLocked: !party?.routeLocked }))}
-                >
-                  {party?.routeLocked ? 'Unlock route' : 'Lock route'}
-                </button>
-                <button className="small danger" onClick={() => call(() => api.post('/party/clear-route'))}>
-                  Clear route
-                </button>
-              </>
+              <button
+                className="small"
+                onClick={() => call(() => api.patch('/party', { routeLocked: !party?.routeLocked }))}
+              >
+                {party?.routeLocked ? 'Unlock route' : 'Lock route'}
+              </button>
             ) : null}
+            {/* Clearing is player-level: whoever drew a wrong line can rub it
+                out. Once the GM locks the route it stops being theirs to clear
+                — and the server refuses it too, not just this button. */}
+            <button
+              className="small danger"
+              disabled={busy || (!isGM && Boolean(party?.routeLocked)) || route.length === 0}
+              title={
+                !isGM && party?.routeLocked
+                  ? 'The GM has locked this route.'
+                  : 'Clear the proposed route for everyone'
+              }
+              onClick={() => call(() => api.post('/party/clear-route'))}
+            >
+              Clear route
+            </button>
           </div>
 
           {inspect ? (
@@ -375,6 +425,9 @@ export default function MapView() {
               costs each hero 1 Fatigue per forced-march day.
             </p>
           </div>
+
+          {/* ---------------- Live day counter ---------------- */}
+          <TravelDayTicker ticker={ticker} journey={journey} />
 
           {/* ---------------- Travel sequence ---------------- */}
           <div className="panel">

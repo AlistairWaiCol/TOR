@@ -33,6 +33,19 @@ export const ALL_SKILLS = ATTRIBUTES.flatMap((a) => a.skills.map((s) => ({ skill
 
 export const PROFICIENCY_GROUPS = ['Axes', 'Bows', 'Spears', 'Swords', 'Brawling'];
 
+/**
+ * The six Callings (core rulebook p.44-46) and the six Standards of Living
+ * (p.72-73), as the General panel's dropdowns.
+ *
+ * Culture is deliberately NOT listed here: the ten-culture set already exists
+ * as `CULTURAL_VIRTUE_CULTURES` in shared/culturalVirtues.js, derived from the
+ * 60 Cultural Virtue rows themselves. A second copy of that list is a second
+ * thing to keep in step, so the sheet imports it from there instead.
+ */
+export const CALLINGS = ['Captain', 'Champion', 'Messenger', 'Scholar', 'Treasure Hunter', 'Warden'];
+
+export const LIVING_STANDARDS = ['Poor', 'Frugal', 'Common', 'Prosperous', 'Rich', 'Very Rich'];
+
 export const STANCES = ['Forward', 'Open', 'Defensive', 'Rear'];
 
 /** The one proficiency group that is a ranged weapon — the Rearward stance's requirement. */
@@ -254,17 +267,62 @@ export function rollContextForSkill(
   };
 }
 
+/**
+ * The equipped shield's contribution to Parry — its Parry Modifier plus the
+ * Reinforced tier. 0 with no shield equipped.
+ *
+ * Computed, never stored, the same treatment Load and the Target Number get:
+ * the Wits panel's "Shield" box displays this rather than taking a typed
+ * number, so the panel's four sub-values actually add up to the Total Parry
+ * printed beneath them.
+ */
+export function shieldParryBonus(sheet) {
+  const valour = sheet?.rewards?.valour ?? 0;
+  return sheet?.shield?.equipped ? effectiveShield(sheet.shield, { valour }).parry : 0;
+}
+
+/**
+ * Total Parry = Base + the equipped shield + Other + Stance.
+ *
+ * `attributes.wits.parryShield` is deliberately NOT in this sum. It used to be,
+ * alongside the computed shield bonus, which double-counted a shield until the
+ * field was zeroed on every sheet by hand. The field is now a computed display
+ * (see shieldParryBonus above) and the stored value is vestigial — left in the
+ * schema for hydrateSheet()'s forward-merge tolerance, read by nothing.
+ */
 export function totalParry(sheet) {
   const w = sheet?.attributes?.wits ?? {};
-  const valour = sheet?.rewards?.valour ?? 0;
-  const shieldBonus = sheet?.shield?.equipped ? effectiveShield(sheet.shield, { valour }).parry : 0;
   return (
     (Number(w.parryBase) || 0) +
-    (Number(w.parryShield) || 0) +
     (Number(w.parryOther) || 0) +
     (Number(w.parryStance) || 0) +
-    shieldBonus
+    shieldParryBonus(sheet)
   );
+}
+
+/**
+ * Useful Items on this sheet whose bonus is written against a named skill.
+ *
+ * Purely for display next to a roll. A Useful Item's bonus is something the GM
+ * awards case-by-case when it is narratively appropriate, not a standing
+ * modifier — so this feeds a reminder in the roll dialog, and nothing in the
+ * dice engine ever reads it. The GM types it into the existing Flat bonus field
+ * if they decide it applies, the same opt-in shape a Hope spend has.
+ *
+ * Both `skill1` and `skill2` are free text on the sheet, so the match is
+ * case- and whitespace-insensitive; a row with no name or no bonus is skipped,
+ * since a half-filled row has nothing useful to say at the table.
+ */
+export function usefulItemsForSkill(sheet, skillName) {
+  const wanted = String(skillName ?? '').trim().toLowerCase();
+  if (!wanted) return [];
+  if (!sheet?.usefulItems?.useTable) return []; // the plain gear box has no structure to match on
+  return (sheet.usefulItems.items ?? []).filter((item) => {
+    if (!item?.name || !Number(item.bonus)) return false;
+    return [item.skill1, item.skill2].some(
+      (s) => String(s ?? '').trim().toLowerCase() === wanted,
+    );
+  });
 }
 
 /** Combined Protection roll rating: equipped armour protection + CF bonuses. */

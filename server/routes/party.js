@@ -1,7 +1,8 @@
 import express from 'express';
-import { requireAuth, requireGM } from '../lib/auth.js';
+import { requireAuth } from '../lib/auth.js';
 import { getActiveCalibration, getParty, updateParty } from '../lib/store.js';
 import { ROLE_KEYS, TRAVEL_ROLES, validateRoleAssignments } from '../../shared/journey.js';
+import { snapPathToHexes } from '../../shared/hexMath.js';
 import { broadcast, broadcastSnapshot } from '../realtime.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 
@@ -92,14 +93,63 @@ router.put(
   }),
 );
 
+/**
+ * Clearing the route is player-level, like drawing one — a player who has just
+ * drawn a wrong line should not have to ask the GM to rub it out.
+ *
+ * A LOCKED route is the GM's, though, so a player clearing one is refused here
+ * and not merely hidden in the UI: the same state check `PATCH /` already makes
+ * before accepting a new route, for the same reason.
+ */
 router.post(
   '/clear-route',
-  requireGM,
-  asyncHandler(async (_req, res) => {
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const party = await getParty();
+    if (party.routeLocked && !req.isGM) {
+      return res.status(403).json({ error: 'The route is locked by the GM.' });
+    }
     const updated = await updateParty({ route: [], routeLocked: false });
     broadcast('party:update', updated);
     await broadcastSnapshot();
-    res.json({ party: updated });
+    return res.json({ party: updated });
+  }),
+);
+
+/**
+ * The player-side freehand route tool: a drawn polyline in ORIGINAL-image pixel
+ * coordinates becomes exactly the same `[{col,row}]` route the GM's click tool
+ * produces (see snapPathToHexes in shared/hexMath.js).
+ *
+ * The snapping happens HERE rather than in the browser because the server owns
+ * the calibration — the client sends only what the finger drew, and never has
+ * to know where a hex boundary is. Same lock check as every other route write.
+ */
+router.post(
+  '/draw-route',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const party = await getParty();
+    if (party.routeLocked && !req.isGM) {
+      return res.status(403).json({ error: 'The route is locked by the GM.' });
+    }
+    const calibration = await getActiveCalibration();
+    if (!calibration) return res.status(400).json({ error: 'No map is calibrated yet.' });
+
+    const points = (Array.isArray(req.body?.points) ? req.body.points : [])
+      .map((p) => ({ x: Number(p?.x), y: Number(p?.y) }))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (points.length < 2) {
+      return res.status(400).json({ error: 'A drawn route needs at least two points.' });
+    }
+
+    const route = snapPathToHexes(points, calibration);
+    if (route.length < 1) return res.status(400).json({ error: 'That line did not cross any hex.' });
+
+    const updated = await updateParty({ route });
+    broadcast('party:update', updated);
+    await broadcastSnapshot();
+    return res.json({ party: updated, route });
   }),
 );
 

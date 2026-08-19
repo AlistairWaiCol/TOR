@@ -8,6 +8,7 @@ import {
   SEASONS,
   computeFatigueRelief,
   computeJourneyDays,
+  journeyTickSequence,
   lookupJourneyEvent,
   marchingTestDistance,
   promptedRollFor,
@@ -357,5 +358,154 @@ describe('promptedRollFor', () => {
   it('stays quiet when the resolution step has no pending event yet', () => {
     const travel = { phase: 'awaiting_resolution', state: {} };
     assert.equal(promptedRollFor({ travel, journey, characterId: LOOKOUT }), null);
+  });
+});
+
+/* --- live travel animation --------------------------------------------------
+ * The tick sequence is the per-hex breakdown computeJourneyDays() cannot give,
+ * so the single most important property is that the two agree on the total.
+ */
+
+describe('journeyTickSequence', () => {
+  const path = (n) => Array.from({ length: n }, (_, i) => ({ col: i + 1, row: 0 }));
+  const hardAt = (...indices) => (_hex, i) => indices.includes(i);
+  const lastDay = (steps) => (steps.length ? steps[steps.length - 1].day : 0);
+
+  it('spends one day per hex on ordinary ground, moving on each', () => {
+    const steps = journeyTickSequence({ path: path(3) });
+    assert.equal(steps.length, 3);
+    assert.deepEqual(
+      steps.map((s) => [s.day, s.moved]),
+      [
+        [1, true],
+        [2, true],
+        [3, true],
+      ],
+    );
+  });
+
+  it('gives a hard-terrain hex a second day with no further movement', () => {
+    const steps = journeyTickSequence({ path: path(3), isHardTerrain: hardAt(1) });
+    assert.deepEqual(
+      steps.map((s) => [s.day, s.moved]),
+      [
+        [1, true], // hex 1
+        [2, true], // hex 2 — hard
+        [3, false], // ...and its extra day, standing still
+        [4, true], // hex 3
+      ],
+    );
+  });
+
+  it('under Forced March moves twice per day, spending the day on the second hex', () => {
+    const steps = journeyTickSequence({ path: path(4), forcedMarch: true });
+    assert.deepEqual(
+      steps.map((s) => [s.day, s.moved]),
+      [
+        [0, true], // first of the pair — ground covered, no day yet
+        [1, true], // second of the pair — the day is spent here
+        [1, true],
+        [2, true],
+      ],
+    );
+  });
+
+  it('still charges a day for a lone trailing hex at the end of the journey', () => {
+    const steps = journeyTickSequence({ path: path(5), forcedMarch: true });
+    assert.equal(lastDay(steps), 3); // ceil(5 / 2)
+  });
+
+  it('does not charge for that half-pair until the journey actually ends', () => {
+    // Same 5 hexes, walked as two legs. The pairing must carry across the leg
+    // boundary, or a journey split into legs would cost more days than one
+    // walked in a single stretch.
+    const legA = journeyTickSequence({
+      path: path(3),
+      forcedMarch: true,
+      startHexIndex: 0,
+      finalLeg: false,
+    });
+    assert.equal(lastDay(legA), 1); // floor(3 / 2) — mid-journey
+    const legB = journeyTickSequence({
+      path: path(2),
+      forcedMarch: true,
+      startDay: lastDay(legA),
+      startHexIndex: 3,
+      finalLeg: true,
+    });
+    assert.equal(lastDay(legB), 3); // ceil(5 / 2), same as the single-leg count
+  });
+
+  it('applies hard terrain and Forced March independently — the documented reading', () => {
+    // Judgment call (see README): a hard-terrain hex inside a forced-march pair
+    // still adds its own day; the pair still spends only one for its movement.
+    const steps = journeyTickSequence({
+      path: path(2),
+      forcedMarch: true,
+      isHardTerrain: hardAt(0),
+    });
+    assert.deepEqual(
+      steps.map((s) => [s.day, s.moved]),
+      [
+        [0, true], // first of the pair
+        [1, false], // its hard-terrain day
+        [2, true], // second of the pair, spending the march day
+      ],
+    );
+  });
+
+  it('carries the running day count in from the previous leg', () => {
+    const steps = journeyTickSequence({ path: path(2), startDay: 7 });
+    assert.deepEqual(steps.map((s) => s.day), [8, 9]);
+  });
+
+  it('is empty for a leg that moved nowhere', () => {
+    assert.deepEqual(journeyTickSequence({ path: [] }), []);
+  });
+
+  // The correctness check: whatever pacing the animation chooses, its total has
+  // to be the number the journey actually gets logged with.
+  it('totals exactly what computeJourneyDays() does, for every shape', () => {
+    for (const hexes of [1, 2, 3, 4, 5, 8, 11]) {
+      for (const forcedMarch of [false, true]) {
+        for (const hardCount of [0, 1, 3]) {
+          if (hardCount > hexes) continue;
+          const hard = Array.from({ length: hardCount }, (_, i) => i);
+          const steps = journeyTickSequence({
+            path: path(hexes),
+            isHardTerrain: hardAt(...hard),
+            forcedMarch,
+          });
+          const authoritative = computeJourneyDays({
+            hexesTraversed: hexes,
+            hardTerrainHexes: hardCount,
+            forcedMarch,
+          });
+          assert.equal(
+            lastDay(steps),
+            authoritative.beforeMount,
+            `${hexes} hexes, ${hardCount} hard, forcedMarch=${forcedMarch}`,
+          );
+        }
+      }
+    }
+  });
+
+  it('deliberately ignores the mounted halving — that is a final-total adjustment', () => {
+    const steps = journeyTickSequence({ path: path(6) });
+    const mounted = computeJourneyDays({ hexesTraversed: 6, mounted: true });
+    assert.equal(lastDay(steps), 6);
+    assert.equal(mounted.totalDays, 3);
+    // The live counter running ahead of the logged total on a mounted journey
+    // is expected behaviour, not drift.
+    assert.equal(lastDay(steps), mounted.beforeMount);
+  });
+
+  it('walks the hexes it was given, in order', () => {
+    const steps = journeyTickSequence({ path: path(3), isHardTerrain: hardAt(2) });
+    assert.deepEqual(
+      steps.filter((s) => s.moved).map((s) => s.hex.col),
+      [1, 2, 3],
+    );
   });
 });
