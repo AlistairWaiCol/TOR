@@ -558,6 +558,8 @@ export async function migrate() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await migrate();
   console.log(`Schema up to date (${isPg ? 'postgres' : 'sqlite'}).`);
-  if (isPg) await getPgPool().end();
+  // process.exit() terminates immediately regardless of open handles — no need
+  // to await a graceful pool shutdown, which can hang against a remote proxy
+  // (e.g. Railway's) well past when the actual work is already done.
   process.exit(0);
 }

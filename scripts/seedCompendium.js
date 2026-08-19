@@ -12,8 +12,7 @@
 
 import { eq } from 'drizzle-orm';
 import { migrate } from '../server/db/migrate.js';
-import { db, getPgPool, schema } from '../server/db/index.js';
-import { config } from '../server/config.js';
+import { db, schema } from '../server/db/index.js';
 
 await migrate();
 
@@ -29,5 +28,8 @@ console.log(
     `Catalogue holds ${items} item(s) and ${locations} location(s); both are yours to fill in.`,
 );
 
-if (config.dbClient === 'pg') await getPgPool().end();
+// process.exit() terminates immediately regardless of open handles, so there's
+// no need to await a graceful pool shutdown first — against a remote proxy
+// (e.g. Railway's), that close handshake can hang well past when the actual
+// work is already done.
 process.exit(0);

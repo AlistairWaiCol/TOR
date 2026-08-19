@@ -30,8 +30,6 @@
 
 import fs from 'node:fs';
 import { migrate } from '../server/db/migrate.js';
-import { getPgPool } from '../server/db/index.js';
-import { config } from '../server/config.js';
 import { createCharacter, listCharacters } from '../server/lib/store.js';
 
 const SOURCE = process.argv[2];
@@ -246,5 +244,8 @@ for (const entry of raw) {
 }
 
 console.log(`\nDone — imported ${imported}, skipped ${skipped} (already present).`);
-if (config.dbClient === 'pg') await getPgPool().end();
+// process.exit() terminates immediately regardless of open handles, so there's
+// no need to await a graceful pool shutdown first — against a remote proxy
+// (e.g. Railway's), that close handshake can hang well past when the actual
+// work is already done.
 process.exit(0);
