@@ -57,13 +57,30 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: err.message || 'Something went wrong.' });
 });
 
+/** `postgres://user:PASSWORD@host/db` -> `postgres://user:***@host/db` — this string reaches the
+ * startup log, and on Railway that means it reaches the dashboard's deploy logs too. SQLite's
+ * `file:./data/one-ring.db` has no credentials and isn't touched — `new URL()` parses it "successfully"
+ * but silently rewrites the relative path (`file:./x` -> `file:///x`), which is a different, wrong path. */
+function redactedDatabaseUrl() {
+  const url = config.databaseUrl;
+  if (config.dbClient !== 'pg') return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.password) parsed.password = '***';
+    return parsed.toString();
+  } catch {
+    return '(unparseable DATABASE_URL — not logging it verbatim in case it carries credentials)';
+  }
+}
+
 const server = http.createServer(app);
 attachRealtime(server);
 
 server.listen(config.port, () => {
   console.log(`\n  One Ring Companion API  http://localhost:${config.port}`);
   console.log(`  Client (vite dev)       ${config.clientOrigin}`);
-  console.log(`  Database                ${config.dbClient} — ${config.databaseUrl}`);
+  console.log(`  Database                ${config.dbClient} — ${redactedDatabaseUrl()}`);
+  console.log(`  Uploads (map/handouts)  ${paths.uploads}`);
   console.log(
     `  Discord webhook         ${config.discordWebhookUrl ? 'configured' : 'not configured (posting skipped)'}\n`,
   );
