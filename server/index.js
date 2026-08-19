@@ -10,7 +10,7 @@ import { ensureDirs } from './lib/images.js';
 import apiRoutes from './routes/index.js';
 import { attachRealtime } from './realtime.js';
 
-migrate();
+await migrate();
 await ensureDirs();
 
 const app = express();

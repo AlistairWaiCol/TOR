@@ -13,6 +13,7 @@
     "db:migrate": "node server/db/migrate.js",
     "seed:map": "node scripts/seedMap.js",
     "seed:compendium": "node scripts/seedCompendium.js",
+    "seed:characters": "node scripts/seedCharacters.js",
     "test": "node --test \"tests/*.test.js\""
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "drizzle-orm": "^0.38.4",
     "express": "^4.21.2",
     "multer": "^2.2.0",
+    "pg": "^8.13.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.1",

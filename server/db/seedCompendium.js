@@ -12,8 +12,13 @@
  * Virtue names appear under more than one culture (Bree Hobbits share four of
  * theirs with Men of Bree and two with Hobbits of the Shire), and catalogue
  * items are keyed on (kind, name) for the same reason.
+ *
+ * Written against the Drizzle query builder rather than raw SQL, so it runs
+ * unchanged against either dialect — no `sqlite`/`pg` branch needed here.
  */
 
+import { and, eq } from 'drizzle-orm';
+import { db, schema } from './index.js';
 import { CORE_VIRTUES, coreCatalogueItems, coreRewardDefinitions } from '../../shared/compendium.js';
 import { CULTURAL_VIRTUES } from '../../shared/culturalVirtues.js';
 
@@ -21,132 +26,134 @@ function newId() {
   return crypto.randomUUID();
 }
 
-export function seedCompendium(sqlite) {
+export async function seedCompendium() {
   const nowIso = new Date().toISOString();
 
-  const findVirtue = sqlite.prepare("SELECT id FROM virtues WHERE name = ? AND source = 'core'");
-  const insertVirtue = sqlite.prepare(
-    `INSERT INTO virtues (id, name, effect, source, created_at, updated_at)
-       VALUES (?, ?, ?, 'core', ?, ?)`,
-  );
-  const updateVirtue = sqlite.prepare('UPDATE virtues SET effect = ?, updated_at = ? WHERE id = ?');
-
   for (const virtue of CORE_VIRTUES) {
-    const existing = findVirtue.get(virtue.name);
-    if (existing) updateVirtue.run(virtue.effect, nowIso, existing.id);
-    else insertVirtue.run(newId(), virtue.name, virtue.effect, nowIso, nowIso);
+    const [existing] = await db
+      .select({ id: schema.virtues.id })
+      .from(schema.virtues)
+      .where(and(eq(schema.virtues.name, virtue.name), eq(schema.virtues.source, 'core')));
+    if (existing) {
+      await db
+        .update(schema.virtues)
+        .set({ effect: virtue.effect, updatedAt: nowIso })
+        .where(eq(schema.virtues.id, existing.id));
+    } else {
+      await db.insert(schema.virtues).values({
+        id: newId(),
+        name: virtue.name,
+        effect: virtue.effect,
+        source: 'core',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+    }
   }
-
-  const findReward = sqlite.prepare(
-    "SELECT id FROM reward_definitions WHERE name = ? AND source = 'core'",
-  );
-  const insertReward = sqlite.prepare(
-    `INSERT INTO reward_definitions (id, name, code, applies_to, summary, tiers, source, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'core', ?, ?)`,
-  );
-  const updateReward = sqlite.prepare(
-    `UPDATE reward_definitions
-        SET code = ?, applies_to = ?, summary = ?, tiers = ?, updated_at = ?
-      WHERE id = ?`,
-  );
 
   for (const reward of coreRewardDefinitions()) {
     const appliesTo = JSON.stringify(reward.appliesTo);
     const tiers = JSON.stringify(reward.tiers);
-    const existing = findReward.get(reward.name);
+    const [existing] = await db
+      .select({ id: schema.rewardDefinitions.id })
+      .from(schema.rewardDefinitions)
+      .where(and(eq(schema.rewardDefinitions.name, reward.name), eq(schema.rewardDefinitions.source, 'core')));
     if (existing) {
-      updateReward.run(reward.code, appliesTo, reward.summary, tiers, nowIso, existing.id);
+      await db
+        .update(schema.rewardDefinitions)
+        .set({ code: reward.code, appliesTo, summary: reward.summary, tiers, updatedAt: nowIso })
+        .where(eq(schema.rewardDefinitions.id, existing.id));
     } else {
-      insertReward.run(
-        newId(),
-        reward.name,
-        reward.code,
+      await db.insert(schema.rewardDefinitions).values({
+        id: newId(),
+        name: reward.name,
+        code: reward.code,
         appliesTo,
-        reward.summary,
+        summary: reward.summary,
         tiers,
-        nowIso,
-        nowIso,
-      );
+        source: 'core',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
     }
   }
 
-  seedCulturalVirtues(sqlite, nowIso);
-  seedCatalogueItems(sqlite, nowIso);
+  await seedCulturalVirtues(nowIso);
+  await seedCatalogueItems(nowIso);
 
   return true;
 }
 
-function seedCulturalVirtues(sqlite, nowIso) {
-  const find = sqlite.prepare(
-    "SELECT id FROM cultural_virtues WHERE name = ? AND culture = ? AND source = 'core'",
-  );
-  const insert = sqlite.prepare(
-    `INSERT INTO cultural_virtues (id, name, description, culture, source, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'core', ?, ?)`,
-  );
-  const update = sqlite.prepare(
-    'UPDATE cultural_virtues SET description = ?, updated_at = ? WHERE id = ?',
-  );
-
+async function seedCulturalVirtues(nowIso) {
   for (const virtue of CULTURAL_VIRTUES) {
-    const existing = find.get(virtue.name, virtue.culture);
-    if (existing) update.run(virtue.description, nowIso, existing.id);
-    else insert.run(newId(), virtue.name, virtue.description, virtue.culture, nowIso, nowIso);
+    const [existing] = await db
+      .select({ id: schema.culturalVirtues.id })
+      .from(schema.culturalVirtues)
+      .where(
+        and(
+          eq(schema.culturalVirtues.name, virtue.name),
+          eq(schema.culturalVirtues.culture, virtue.culture),
+          eq(schema.culturalVirtues.source, 'core'),
+        ),
+      );
+    if (existing) {
+      await db
+        .update(schema.culturalVirtues)
+        .set({ description: virtue.description, updatedAt: nowIso })
+        .where(eq(schema.culturalVirtues.id, existing.id));
+    } else {
+      await db.insert(schema.culturalVirtues).values({
+        id: newId(),
+        name: virtue.name,
+        description: virtue.description,
+        culture: virtue.culture,
+        source: 'core',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+    }
   }
 }
 
-function seedCatalogueItems(sqlite, nowIso) {
-  const find = sqlite.prepare(
-    "SELECT id FROM items_catalogue WHERE kind = ? AND name = ? AND source = 'core'",
-  );
-  const insert = sqlite.prepare(
-    `INSERT INTO items_catalogue
-       (id, kind, name, type, proficiency, damage, injury, injury_two_handed,
-        protection, parry, load, min_standard, notes, source, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'core', ?, ?)`,
-  );
-  const update = sqlite.prepare(
-    `UPDATE items_catalogue
-        SET type = ?, proficiency = ?, damage = ?, injury = ?, injury_two_handed = ?,
-            protection = ?, parry = ?, load = ?, min_standard = ?, notes = ?, updated_at = ?
-      WHERE id = ?`,
-  );
-
+async function seedCatalogueItems(nowIso) {
   for (const item of coreCatalogueItems()) {
-    const existing = find.get(item.kind, item.name);
+    const [existing] = await db
+      .select({ id: schema.itemsCatalogue.id })
+      .from(schema.itemsCatalogue)
+      .where(
+        and(
+          eq(schema.itemsCatalogue.kind, item.kind),
+          eq(schema.itemsCatalogue.name, item.name),
+          eq(schema.itemsCatalogue.source, 'core'),
+        ),
+      );
+    const values = {
+      type: item.type,
+      proficiency: item.proficiency,
+      damage: item.damage,
+      injury: item.injury,
+      injuryTwoHanded: item.injuryTwoHanded,
+      protection: item.protection,
+      parry: item.parry,
+      load: item.load,
+      minStandard: item.minStandard,
+      notes: item.notes,
+    };
     if (existing) {
-      update.run(
-        item.type,
-        item.proficiency,
-        item.damage,
-        item.injury,
-        item.injuryTwoHanded,
-        item.protection,
-        item.parry,
-        item.load,
-        item.minStandard,
-        item.notes,
-        nowIso,
-        existing.id,
-      );
+      await db
+        .update(schema.itemsCatalogue)
+        .set({ ...values, updatedAt: nowIso })
+        .where(eq(schema.itemsCatalogue.id, existing.id));
     } else {
-      insert.run(
-        newId(),
-        item.kind,
-        item.name,
-        item.type,
-        item.proficiency,
-        item.damage,
-        item.injury,
-        item.injuryTwoHanded,
-        item.protection,
-        item.parry,
-        item.load,
-        item.minStandard,
-        item.notes,
-        nowIso,
-        nowIso,
-      );
+      await db.insert(schema.itemsCatalogue).values({
+        id: newId(),
+        kind: item.kind,
+        name: item.name,
+        ...values,
+        source: 'core',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
     }
   }
 }

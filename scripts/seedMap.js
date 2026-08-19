@@ -24,7 +24,7 @@ const DEFAULT_SOURCE = "D:\\Downloads\\Wilderland Adventurer's Map_page-0001.jpg
 
 const source = process.argv[2] || DEFAULT_SOURCE;
 
-migrate();
+await migrate();
 await ensureDirs();
 
 if (!fs.existsSync(source)) {

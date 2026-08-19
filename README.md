@@ -41,8 +41,8 @@ npm run build             # production client build into dist/ (served by the AP
 | `GM_PASSCODE` | Adds the GM-only controls |
 | `SESSION_SECRET` | Signs the session cookie |
 | `DISCORD_WEBHOOK_URL` | Optional. Unset/empty → posting is skipped silently |
-| `DATABASE_URL` | `file:./data/one-ring.db` for SQLite |
-| `DB_CLIENT` | `sqlite` now, `pg` after the Postgres swap |
+| `DATABASE_URL` | `file:./data/one-ring.db` for SQLite; a `postgres://...` connection string for Postgres |
+| `DB_CLIENT` | `sqlite` (default) or `pg` — see "Postgres + Railway" below |
 | `PORT`, `CLIENT_ORIGIN` | Server port and the dev client origin |
 
 ---
@@ -124,6 +124,7 @@ tests/             dice.test.js, journey.test.js, character.test.js, compendium.
                    discord.test.js, integration.test.js
 scripts/seedMap.js Import the campaign map and build derivatives
 scripts/seedCompendium.js  Re-seed the core Virtues and Rewards (migrate() already does this)
+scripts/seedCharacters.js  Import a party roster from a characters_seed.json file
 uploads/
   seed/            Original map images — never served over HTTP
   originals/       Uploaded maps and handouts — never served over HTTP
@@ -312,6 +313,28 @@ Things the spec left open, and what was chosen:
   scales with the grid at every zoom and tier, with a dark canvas drop-shadow behind it: it is a warm
   gold pin on warm-toned map art, and the shadow is doing real legibility work, not decoration. The
   original gold dot survives as the fallback while the image loads or if it fails.
+- **The Postgres swap turned out to not be implemented, only documented.** This README used to
+  describe it as "trivial — swap `sqliteTable` for `pgTable`" without anyone actually doing it;
+  `DB_CLIENT` was read from the environment but never branched on anywhere. Discovered because a
+  Railway deploy with a Postgres addon attached was still reporting `"db":"sqlite"` from
+  `/api/health` — meaning production had been running on SQLite inside the container's ephemeral
+  filesystem the whole time, silently losing data on every redeploy. It's real now (see "Postgres +
+  Railway" above), and was built and verified against an actual local Postgres instance, not just
+  written and assumed to work.
+- **`seedCompendium.js` was rewritten from raw `sqlite.prepare()` calls to the Drizzle query
+  builder** as part of making it dialect-portable — same idempotent find-or-insert logic, just
+  through `db.select()`/`db.insert()` instead of hand-written `?`-placeholder SQL, so it runs
+  unchanged against either dialect instead of needing a second parallel implementation.
+- **Fixed a real, previously-dormant cross-platform bug while touching `migrate.js`:** its "was this
+  file run directly?" check built a `file://` URL by hand and compared it against
+  `import.meta.url`, which is wrong on Windows (an absolute path needs `file:///D:/...`, three
+  slashes, not two). `npm run db:migrate` has therefore always silently done nothing on Windows —
+  masked because the server calls `migrate()` directly at startup instead of through that check.
+  Fixed with `pathToFileURL()`, the correct cross-platform way to do this comparison.
+- **`seedCharacters.js` skips existing characters by name rather than updating or duplicating them.**
+  The safer default for a script whose main job is "populate a fresh database" — re-running it after
+  adding a new player to the source file should only add the new one, not silently overwrite hand-
+  edited stats on the existing four.
 
 ## Not in v1
 
@@ -326,21 +349,75 @@ and `server/routes/compendium.js` is one generic CRUD handler over them — so N
 become a table, a section entry and a render branch, not another route file. One table per section
 rather than a single polymorphic table, because the sections have genuinely different columns.
 
-## Later: Postgres + Railway
+## Postgres + Railway
 
-Not part of this build. When you're ready:
+The dialect switch is real and implemented, not just designed-for: set `DB_CLIENT=pg` and
+`DATABASE_URL` to a Postgres connection string and the app runs on Postgres, unchanged everywhere
+outside three files.
 
-1. `server/db/schema.js` is the only dialect-aware file — swap `sqliteTable` → `pgTable`
-   (`drizzle-orm/pg-core`) and `integer(..., { mode: 'boolean' })` → `boolean(...)`. `text`, `real`
-   and the JSON-as-text columns map straight across, and no raw SQLite-only SQL is used anywhere.
-2. `server/db/index.js` is the only place a driver is constructed — swap `better-sqlite3` for `pg`
-   and `drizzle-orm/node-postgres`.
-3. Replace `server/db/migrate.js` with `drizzle-kit generate` + the Drizzle migrator. That file is
-   also the one place SQLite-specific SQL lives — `addMissingColumns()` guards its `ALTER TABLE`s
-   with a `PRAGMA table_info` read, since SQLite has no `ADD COLUMN IF NOT EXISTS`. Keep
-   `server/db/seedCompendium.js` (its prepared statements are plain portable SQL) and call it after
-   the migrator.
-4. Then follow spec §3 for Railway: push to GitHub, deploy from repo, add PostgreSQL, set
-   `PLAYER_PASSCODE` / `GM_PASSCODE` / `SESSION_SECRET` / `DISCORD_WEBHOOK_URL`, confirm
-   `DATABASE_URL` is linked, generate a domain. `npm run build` + `npm start` serves the built client
-   from the same process.
+- `server/db/schema.js` (SQLite) and `server/db/schema.pg.js` (Postgres) are field-for-field mirrors
+  of each other — same tables, same columns, same JS types. Every other file imports `schema` from
+  `server/db/index.js`, which picks the right one, so nothing downstream (`server/lib/store.js`,
+  every route) is dialect-aware.
+- `server/db/index.js` constructs either a `better-sqlite3` or a `pg.Pool` connection and hands
+  Drizzle the matching schema. Postgres connects with `ssl: { rejectUnauthorized: false }` — the
+  standard pragmatic choice for managed Postgres behind a proxy (Railway, Heroku, Render); it still
+  encrypts the connection, it just doesn't validate the CA.
+- `server/db/migrate.js` hand-rolls `CREATE TABLE IF NOT EXISTS` for both dialects rather than using
+  `drizzle-kit` — simplest thing that could work for a two-table-count-forever personal app. Table
+  creation is the one thing that has to be dialect-specific SQL; everything after it (the singleton
+  campaign/party/travel rows, the Compendium seed in `seedCompendium.js`) goes through the Drizzle
+  query builder and is identical code for both dialects.
+- Timestamp columns stay `text` in both dialects, not native `timestamp`/`datetime` — the app always
+  writes `new Date().toISOString()` from JS and expects to read back a string; a native timestamp
+  type would hand back a `Date` object from Postgres instead, a real behavioural difference. The few
+  inserts that rely on the column's own default (not JS setting it explicitly) use a Postgres
+  `to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` expression that produces the
+  same shape `toISOString()` does.
+- JSON documents (character sheets, journey routes, etc.) stay `text` in Postgres too, parsed in the
+  repo layer exactly as SQLite does — switching to native `jsonb` would be a genuine future
+  improvement but touches every call site, not worth the risk on a same-day cutover.
+
+### Deploying to Railway
+
+Follow spec §3: push to GitHub, deploy from the repo, add a PostgreSQL database, set
+`PLAYER_PASSCODE` / `GM_PASSCODE` / `SESSION_SECRET` / `DISCORD_WEBHOOK_URL` / `DB_CLIENT=pg` on the
+web service, confirm `DATABASE_URL` is linked from the Postgres service, generate a domain.
+`npm run build` + `npm start` serves the built client from the same process. **`DB_CLIENT=pg` is the
+part that's easy to forget** — without it the app silently falls back to SQLite inside the
+container's filesystem, which is ephemeral and gets wiped on every redeploy. Check
+`GET /api/health` after deploying — its `db` field says which one is actually live.
+
+### Seeding a database — local or Railway, first time or after a reset
+
+Three scripts, all dialect-aware (they read `DB_CLIENT`/`DATABASE_URL` the same way the server
+does), each safe to re-run:
+
+```bash
+npm run db:migrate                                        # tables only, no data
+npm run seed:map                                          # campaign map + hex calibration
+npm run seed:compendium                                   # core Virtues/Rewards/catalogue/Cultural Virtues
+npm run seed:characters -- "C:\path\to\characters_seed.json"   # a party roster
+```
+
+`seed:map` and `seed:compendium` skip/update in place if their data already exists (a calibration is
+matched by name, Compendium `source = 'core'` rows are refreshed, never duplicated).
+`seed:characters` matches existing characters by name and skips them with a warning — it only ever
+adds characters that aren't there yet, so it's safe to run again after adding new players to the
+source file.
+
+**Against Railway specifically:** run these from your own machine with `DATABASE_URL` set to
+Railway's Postgres connection string for that one command, e.g. in PowerShell:
+
+```powershell
+$env:DB_CLIENT = "pg"
+$env:DATABASE_URL = "<paste from Railway's Postgres service → Variables → DATABASE_PUBLIC_URL>"
+npm run seed:map
+npm run seed:compendium
+npm run seed:characters -- "C:\path\to\characters_seed.json"
+```
+
+Use `DATABASE_PUBLIC_URL` (the externally-reachable one with a public host/port), not the internal
+`DATABASE_URL` Railway gives the web service itself — that one only resolves inside Railway's own
+network. Unset `$env:DB_CLIENT`/`$env:DATABASE_URL` afterward (or just close the terminal) so your
+next `npm run dev` goes back to local SQLite.

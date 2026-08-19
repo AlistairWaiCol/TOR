@@ -448,7 +448,7 @@ describe('Compendium', () => {
     assert.equal(mine.data.entry.source, 'custom', 'the app never writes core entries');
 
     const { migrate } = await import('../server/db/migrate.js');
-    migrate();
+    await migrate();
 
     const after = await player('GET', '/compendium/virtues');
     assert.equal(after.data.entries.length, before.data.entries.length + 1);
