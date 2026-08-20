@@ -76,8 +76,10 @@ export default function Compendium() {
       const d = await api.post(`/compendium/${section}`, body);
       setData((prev) => ({ ...prev, [section]: [...prev[section], d.entry] }));
       refresh();
+      return d.entry;
     } catch (e) {
       setError(e.message);
+      return null;
     }
   };
 
@@ -711,6 +713,11 @@ async function announceFellAbility(sourceName, ability) {
 }
 
 function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry, isGM }) {
+  // Collapsed by default (see the category-group CSS), except whichever
+  // category a freshly-added entry lands in — that one opens automatically
+  // so "+ adversary" doesn't drop the new row somewhere out of sight.
+  const [expanded, setExpanded] = useState(() => new Set());
+
   const groups = useMemo(() => {
     const byCategory = new Map();
     for (const adv of entries) {
@@ -722,11 +729,24 @@ function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry
     return ADVERSARY_CATEGORIES.filter((c) => byCategory.has(c)).map((c) => [c, byCategory.get(c)]);
   }, [entries]);
 
+  const setCategoryOpen = (category, open) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(category);
+      else next.delete(category);
+      return next;
+    });
+
+  const addAdversary = async () => {
+    const entry = await addEntry({ ...emptyAdversary(), name: 'New Adversary' });
+    if (entry) setCategoryOpen(ADVERSARY_CATEGORIES.includes(entry.category) ? entry.category : 'Other', true);
+  };
+
   return (
     <div className="panel">
       <div className="page-head" style={{ marginBottom: 8 }}>
         <h2 style={{ margin: 0 }}>Adversaries</h2>
-        <button className="small" onClick={() => addEntry({ ...emptyAdversary(), name: 'New Adversary' })}>
+        <button className="small" onClick={addAdversary}>
           + adversary
         </button>
       </div>
@@ -738,7 +758,12 @@ function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry
 
       {groups.length === 0 ? <p className="small muted">No adversaries catalogued yet.</p> : null}
       {groups.map(([category, list]) => (
-        <details key={category} className="category-group">
+        <details
+          key={category}
+          className="category-group"
+          open={expanded.has(category)}
+          onToggle={(e) => setCategoryOpen(category, e.target.open)}
+        >
           <summary>
             {category} <span className="pill">{list.length}</span>
           </summary>

@@ -247,6 +247,8 @@ export const ADVERSARY_CATEGORIES = [
   'Wolves',
   'Undead',
   'Spiders',
+  'Monster',
+  'Unique',
   'Other',
 ];
 
