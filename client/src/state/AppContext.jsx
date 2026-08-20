@@ -12,6 +12,7 @@ const AppContext = createContext(null);
 const PLAYING_AS_KEY = 'orc:playing-as';
 
 const NO_CHARACTERS = [];
+const NO_COMBATANTS = [];
 
 function readPlayingAs() {
   try {
@@ -122,6 +123,8 @@ export function AppProvider({ children }) {
       calibration: snapshot?.calibration ?? null,
       hexes: snapshot?.hexes ?? [],
       locations: snapshot?.locations ?? [],
+      combat: snapshot?.combat ?? null,
+      combatants: snapshot?.combatants ?? NO_COMBATANTS,
       rollFeed,
       connected,
       login,

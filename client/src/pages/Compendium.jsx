@@ -1,17 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ADVERSARY_CATEGORIES,
+  ADVERSARY_SIZES,
   COMPENDIUM_SECTIONS,
   ITEM_KINDS,
   STANDARDS_OF_LIVING,
+  emptyAdversary,
   emptyCatalogueItem,
+  emptyCombatProficiency,
+  emptyFellAbility,
   emptyLocation,
+  hateResolveLabel,
+  misdeedReminder,
   normaliseYears,
 } from '@shared/compendium.js';
 import { CULTURAL_VIRTUE_CULTURES } from '@shared/culturalVirtues.js';
 import { PROFICIENCY_GROUPS } from '@shared/character.js';
 import { api } from '../lib/api.js';
 import { useApp } from '../state/AppContext.jsx';
-import { AreaField, SelectField, TextField } from '../components/Fields.jsx';
+import { AreaField, NumField, SelectField, TextField } from '../components/Fields.jsx';
 
 /**
  * The campaign's shared reference shelf. Sections come from
@@ -21,7 +28,7 @@ import { AreaField, SelectField, TextField } from '../components/Fields.jsx';
  * Edits save on blur, the same as the Journey Log's notes.
  */
 export default function Compendium() {
-  const { refresh } = useApp();
+  const { isGM, refresh } = useApp();
   const [section, setSection] = useState('virtues');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -176,6 +183,17 @@ export default function Compendium() {
           saveEntry={saveEntry}
           addEntry={addEntry}
           removeEntry={removeEntry}
+        />
+      ) : null}
+
+      {section === 'adversaries' ? (
+        <AdversariesPanel
+          entries={entries}
+          editLocal={editLocal}
+          saveEntry={saveEntry}
+          addEntry={addEntry}
+          removeEntry={removeEntry}
+          isGM={isGM}
         />
       ) : null}
     </>
@@ -668,6 +686,302 @@ function LocationsPanel({ entries, editLocal, saveEntry, addEntry, removeEntry }
         Map hexes link to these on the Map Calibration screen — a linked hex shows the Location's
         name on the live map and links back here.
       </p>
+    </div>
+  );
+}
+
+/* ---------------- Adversaries ---------------- */
+
+/**
+ * Announce a Fell Ability to Discord — same plumbing the journey engine
+ * already uses, fired from here rather than mid-fight on the Combat Tracker
+ * so the GM can narrate an ability the moment it matters, not just when a
+ * combatant instance happens to have it.
+ */
+async function announceFellAbility(ability) {
+  await api.post('/combat/fell-ability-announce', {
+    name: ability.name || 'Fell Ability',
+    description: ability.description || '',
+  });
+}
+
+function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry, isGM }) {
+  const setProficiencies = (entry, next) => {
+    editLocal(entry.id, { combatProficiencies: next });
+    saveEntry(entry, { combatProficiencies: next });
+  };
+  const setFellAbilities = (entry, next) => {
+    editLocal(entry.id, { fellAbilities: next });
+    saveEntry(entry, { fellAbilities: next });
+  };
+
+  return (
+    <div className="panel">
+      <div className="page-head" style={{ marginBottom: 8 }}>
+        <h2 style={{ margin: 0 }}>Adversaries</h2>
+        <button className="small" onClick={() => addEntry({ ...emptyAdversary(), name: 'New Adversary' })}>
+          + adversary
+        </button>
+      </div>
+      <p className="small muted">
+        Reusable stat-block templates for the Combat Tracker — adding one to a fight makes an
+        independent copy, so nothing here changes mid-battle. NPCs that will never fight can leave
+        the combat fields blank or zero.
+      </p>
+
+      {entries.map((adv) => {
+        const label = hateResolveLabel(adv.category);
+        const reminder = misdeedReminder(adv.category);
+        const proficiencies = adv.combatProficiencies ?? [];
+        const fellAbilities = adv.fellAbilities ?? [];
+        return (
+          <div key={adv.id} style={{ padding: '12px 0', borderBottom: '1px solid #2c261e' }}>
+            <div className="row">
+              <div style={{ flex: '2 1 200px' }}>
+                <TextField
+                  label="Name"
+                  value={adv.name}
+                  onChange={(v) => editLocal(adv.id, { name: v })}
+                  onBlur={() => saveEntry(adv, { name: adv.name })}
+                />
+              </div>
+              <div style={{ flex: '1 1 140px' }}>
+                <SelectField
+                  label="Category"
+                  value={adv.category}
+                  onChange={(v) => {
+                    editLocal(adv.id, { category: v });
+                    saveEntry(adv, { category: v });
+                  }}
+                  options={ADVERSARY_CATEGORIES}
+                />
+              </div>
+              <div style={{ flex: '1 1 140px' }}>
+                <SelectField
+                  label="Size"
+                  value={adv.size}
+                  onChange={(v) => {
+                    editLocal(adv.id, { size: v });
+                    saveEntry(adv, { size: v });
+                  }}
+                  options={ADVERSARY_SIZES}
+                />
+              </div>
+              <SourcePill entry={adv} />
+              <DeleteButton entry={adv} removeEntry={removeEntry} />
+            </div>
+
+            <AreaField
+              label="Distinctive Features"
+              rows={2}
+              value={adv.distinctiveFeatures}
+              onChange={(v) => editLocal(adv.id, { distinctiveFeatures: v })}
+            />
+            <button
+              className="small"
+              onClick={() => saveEntry(adv, { distinctiveFeatures: adv.distinctiveFeatures })}
+            >
+              Save Distinctive Features
+            </button>
+
+            <div className="grid g4" style={{ marginTop: 8 }}>
+              <NumField
+                label="Attribute Level"
+                value={adv.attributeLevel}
+                onChange={(v) => editLocal(adv.id, { attributeLevel: v })}
+                onBlur={() => saveEntry(adv, { attributeLevel: adv.attributeLevel })}
+              />
+              <NumField
+                label="Endurance"
+                value={adv.endurance}
+                onChange={(v) => editLocal(adv.id, { endurance: v })}
+                onBlur={() => saveEntry(adv, { endurance: adv.endurance })}
+              />
+              <NumField
+                label="Might"
+                value={adv.might}
+                onChange={(v) => editLocal(adv.id, { might: v })}
+                onBlur={() => saveEntry(adv, { might: adv.might })}
+              />
+              <NumField
+                label={label}
+                title="Hate (minions of the Enemy, fight to the death) or Resolve (non-monstrous, may yield or flee) — labelled from Category."
+                value={adv.hateResolve}
+                onChange={(v) => editLocal(adv.id, { hateResolve: v })}
+                onBlur={() => saveEntry(adv, { hateResolve: adv.hateResolve })}
+              />
+              <NumField
+                label="Parry"
+                value={adv.parry}
+                onChange={(v) => editLocal(adv.id, { parry: v })}
+                onBlur={() => saveEntry(adv, { parry: adv.parry })}
+              />
+              <NumField
+                label="Armour"
+                value={adv.armour}
+                onChange={(v) => editLocal(adv.id, { armour: v })}
+                onBlur={() => saveEntry(adv, { armour: adv.armour })}
+              />
+            </div>
+            {reminder ? <p className="small muted">{reminder}</p> : null}
+
+            {/* ---- Combat Proficiencies ---- */}
+            <div style={{ marginTop: 10 }}>
+              <div className="row" style={{ marginBottom: 4 }}>
+                <strong className="small">Combat Proficiencies</strong>
+                <button
+                  className="small"
+                  onClick={() => setProficiencies(adv, [...proficiencies, emptyCombatProficiency()])}
+                >
+                  + proficiency
+                </button>
+              </div>
+              {proficiencies.length ? (
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th style={{ minWidth: 120 }}>Name</th>
+                        <th>Rating</th>
+                        <th>Damage</th>
+                        <th>Injury</th>
+                        <th>Special Damage options</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {proficiencies.map((p, i) => (
+                        <tr key={i}>
+                          <td>
+                            <input
+                              value={p.name}
+                              onChange={(e) => {
+                                const next = proficiencies.slice();
+                                next[i] = { ...p, name: e.target.value };
+                                editLocal(adv.id, { combatProficiencies: next });
+                              }}
+                              onBlur={() => setProficiencies(adv, adv.combatProficiencies)}
+                              style={{ minWidth: 120 }}
+                            />
+                          </td>
+                          {['rating', 'damage', 'injury'].map((f) => (
+                            <td key={f}>
+                              <input
+                                type="number"
+                                value={p[f] ?? 0}
+                                onChange={(e) => {
+                                  const next = proficiencies.slice();
+                                  next[i] = { ...p, [f]: Number(e.target.value) || 0 };
+                                  editLocal(adv.id, { combatProficiencies: next });
+                                }}
+                                onBlur={() => setProficiencies(adv, adv.combatProficiencies)}
+                                style={{ width: 56 }}
+                              />
+                            </td>
+                          ))}
+                          <td>
+                            <input
+                              value={p.special}
+                              placeholder="e.g. Break Shield, Seize"
+                              onChange={(e) => {
+                                const next = proficiencies.slice();
+                                next[i] = { ...p, special: e.target.value };
+                                editLocal(adv.id, { combatProficiencies: next });
+                              }}
+                              onBlur={() => setProficiencies(adv, adv.combatProficiencies)}
+                              style={{ minWidth: 160 }}
+                            />
+                          </td>
+                          <td>
+                            <button
+                              className="small danger"
+                              title="Remove"
+                              onClick={() => setProficiencies(adv, proficiencies.filter((_, j) => j !== i))}
+                            >
+                              ×
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="small muted">No Combat Proficiencies yet.</p>
+              )}
+            </div>
+
+            {/* ---- Fell Abilities ---- */}
+            <div style={{ marginTop: 10 }}>
+              <div className="row" style={{ marginBottom: 4 }}>
+                <strong className="small">Fell Abilities</strong>
+                <button className="small" onClick={() => setFellAbilities(adv, [...fellAbilities, emptyFellAbility()])}>
+                  + fell ability
+                </button>
+              </div>
+              {fellAbilities.length ? (
+                fellAbilities.map((fa, i) => (
+                  <div key={i} className="row" style={{ marginBottom: 6, alignItems: 'flex-start' }}>
+                    <div style={{ flex: '1 1 160px' }}>
+                      <input
+                        value={fa.name}
+                        placeholder="Name"
+                        onChange={(e) => {
+                          const next = fellAbilities.slice();
+                          next[i] = { ...fa, name: e.target.value };
+                          editLocal(adv.id, { fellAbilities: next });
+                        }}
+                        onBlur={() => setFellAbilities(adv, adv.fellAbilities)}
+                      />
+                    </div>
+                    <div style={{ flex: '2 1 260px' }}>
+                      <input
+                        value={fa.description}
+                        placeholder="Description"
+                        onChange={(e) => {
+                          const next = fellAbilities.slice();
+                          next[i] = { ...fa, description: e.target.value };
+                          editLocal(adv.id, { fellAbilities: next });
+                        }}
+                        onBlur={() => setFellAbilities(adv, adv.fellAbilities)}
+                      />
+                    </div>
+                    {isGM ? (
+                      <button
+                        className="small"
+                        title="Announce this Fell Ability to Discord"
+                        onClick={() => announceFellAbility(fa)}
+                      >
+                        💬
+                      </button>
+                    ) : null}
+                    <button
+                      className="small danger"
+                      title="Remove"
+                      onClick={() => setFellAbilities(adv, fellAbilities.filter((_, j) => j !== i))}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="small muted">No Fell Abilities yet.</p>
+              )}
+            </div>
+
+            <AreaField
+              label="Notes"
+              rows={2}
+              value={adv.notes}
+              onChange={(v) => editLocal(adv.id, { notes: v })}
+            />
+            <button className="small" onClick={() => saveEntry(adv, { notes: adv.notes })}>
+              Save Notes
+            </button>
+          </div>
+        );
+      })}
+      {entries.length === 0 ? <p className="small muted">No adversaries catalogued yet.</p> : null}
     </div>
   );
 }

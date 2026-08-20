@@ -25,6 +25,7 @@ const SQLITE_STATEMENTS = [
      tn_base INTEGER NOT NULL DEFAULT 20,
      name TEXT NOT NULL DEFAULT 'Darkening of Mirkwood',
      notes TEXT NOT NULL DEFAULT '',
+     day_hold_seconds INTEGER NOT NULL DEFAULT 5,
      updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
    )`,
 
@@ -84,6 +85,7 @@ const SQLITE_STATEMENTS = [
      current_col INTEGER,
      current_row INTEGER,
      route TEXT NOT NULL DEFAULT '[]',
+     drawn_path TEXT NOT NULL DEFAULT '[]',
      route_locked INTEGER NOT NULL DEFAULT 0,
      mounted INTEGER NOT NULL DEFAULT 0,
      forced_march INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +103,7 @@ const SQLITE_STATEMENTS = [
      from_hex TEXT NOT NULL DEFAULT '',
      to_hex TEXT NOT NULL DEFAULT '',
      route TEXT NOT NULL DEFAULT '[]',
+     drawn_path TEXT NOT NULL DEFAULT '[]',
      route_index INTEGER NOT NULL DEFAULT 0,
      status TEXT NOT NULL DEFAULT 'active',
      mounted INTEGER NOT NULL DEFAULT 0,
@@ -263,6 +266,64 @@ const SQLITE_STATEMENTS = [
      created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
      updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
    )`,
+
+  `CREATE TABLE IF NOT EXISTS adversaries (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     category TEXT NOT NULL DEFAULT 'Other',
+     distinctive_features TEXT NOT NULL DEFAULT '',
+     size TEXT NOT NULL DEFAULT 'human',
+     attribute_level INTEGER NOT NULL DEFAULT 0,
+     endurance INTEGER NOT NULL DEFAULT 0,
+     might INTEGER NOT NULL DEFAULT 0,
+     hate_resolve INTEGER NOT NULL DEFAULT 0,
+     parry INTEGER NOT NULL DEFAULT 0,
+     armour INTEGER NOT NULL DEFAULT 0,
+     combat_proficiencies TEXT NOT NULL DEFAULT '[]',
+     fell_abilities TEXT NOT NULL DEFAULT '[]',
+     notes TEXT NOT NULL DEFAULT '',
+     source TEXT NOT NULL DEFAULT 'custom',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS combatants (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     adversary_id TEXT,
+     category TEXT NOT NULL DEFAULT 'Other',
+     size TEXT NOT NULL DEFAULT 'human',
+     attribute_level INTEGER NOT NULL DEFAULT 0,
+     parry INTEGER NOT NULL DEFAULT 0,
+     armour INTEGER NOT NULL DEFAULT 0,
+     might INTEGER NOT NULL DEFAULT 0,
+     hate_resolve INTEGER NOT NULL DEFAULT 0,
+     hate_resolve_spent INTEGER NOT NULL DEFAULT 0,
+     combat_proficiencies TEXT NOT NULL DEFAULT '[]',
+     fell_abilities TEXT NOT NULL DEFAULT '[]',
+     current_endurance INTEGER NOT NULL DEFAULT 0,
+     max_endurance INTEGER NOT NULL DEFAULT 0,
+     wound_threshold INTEGER NOT NULL DEFAULT 1,
+     wounds_taken INTEGER NOT NULL DEFAULT 0,
+     status TEXT NOT NULL DEFAULT 'active',
+     weary INTEGER NOT NULL DEFAULT 0,
+     attacks_used_this_round INTEGER NOT NULL DEFAULT 0,
+     joined_round INTEGER NOT NULL DEFAULT 1,
+     notes TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS combat_state (
+     id TEXT PRIMARY KEY,
+     active INTEGER NOT NULL DEFAULT 0,
+     round INTEGER NOT NULL DEFAULT 1,
+     stance_locked INTEGER NOT NULL DEFAULT 0,
+     stances TEXT NOT NULL DEFAULT '{}',
+     engagements TEXT NOT NULL DEFAULT '{}',
+     acted_players TEXT NOT NULL DEFAULT '[]',
+     pending_modifiers TEXT NOT NULL DEFAULT '{}',
+     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+   )`,
 ];
 
 /**
@@ -276,6 +337,9 @@ const ADDED_COLUMNS = [
   ['journeys', 'map_snapshot', "TEXT NOT NULL DEFAULT ''"],
   ['items_catalogue', 'injury_two_handed', 'INTEGER NOT NULL DEFAULT 0'],
   ['items_catalogue', 'min_standard', "TEXT NOT NULL DEFAULT ''"],
+  ['campaign_state', 'day_hold_seconds', 'INTEGER NOT NULL DEFAULT 5'],
+  ['party_state', 'drawn_path', "TEXT NOT NULL DEFAULT '[]'"],
+  ['journeys', 'drawn_path', "TEXT NOT NULL DEFAULT '[]'"],
 ];
 
 function addMissingColumns(sqlite) {
@@ -294,9 +358,19 @@ const SQLITE_SEEDS = [
      WHERE NOT EXISTS (SELECT 1 FROM party_state WHERE id = 'singleton')`,
   `INSERT INTO travel_state (id, phase) SELECT 'singleton', 'idle'
      WHERE NOT EXISTS (SELECT 1 FROM travel_state WHERE id = 'singleton')`,
+  `INSERT INTO combat_state (id, active, round) SELECT 'singleton', 0, 1
+     WHERE NOT EXISTS (SELECT 1 FROM combat_state WHERE id = 'singleton')`,
 ];
 
-/** Same table set as SQLITE_STATEMENTS, translated (see schema.pg.js's header comment for the rules). */
+/**
+ * Same table set as SQLITE_STATEMENTS, translated (see schema.pg.js's header comment for the rules).
+ *
+ * Note on the "no legacy deployment" claim a few lines up: it stopped being true
+ * once this app actually had a production deploy. Postgres, unlike SQLite, has a
+ * genuine `ADD COLUMN IF NOT EXISTS`, so a column added to an existing table
+ * (like `day_hold_seconds` below) doesn't need SQLite's PRAGMA-guarded dance —
+ * just add the ALTER statement here alongside the CREATE TABLE.
+ */
 const PG_NOW = `to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 const PG_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS campaign_state (
@@ -306,8 +380,10 @@ const PG_STATEMENTS = [
      tn_base INTEGER NOT NULL DEFAULT 20,
      name TEXT NOT NULL DEFAULT 'Darkening of Mirkwood',
      notes TEXT NOT NULL DEFAULT '',
+     day_hold_seconds INTEGER NOT NULL DEFAULT 5,
      updated_at TEXT NOT NULL DEFAULT (${PG_NOW})
    )`,
+  `ALTER TABLE campaign_state ADD COLUMN IF NOT EXISTS day_hold_seconds INTEGER NOT NULL DEFAULT 5`,
 
   `CREATE TABLE IF NOT EXISTS characters (
      id TEXT PRIMARY KEY,
@@ -365,12 +441,14 @@ const PG_STATEMENTS = [
      current_col INTEGER,
      current_row INTEGER,
      route TEXT NOT NULL DEFAULT '[]',
+     drawn_path TEXT NOT NULL DEFAULT '[]',
      route_locked BOOLEAN NOT NULL DEFAULT false,
      mounted BOOLEAN NOT NULL DEFAULT false,
      forced_march BOOLEAN NOT NULL DEFAULT false,
      roles TEXT NOT NULL DEFAULT '{}',
      updated_at TEXT NOT NULL DEFAULT (${PG_NOW})
    )`,
+  `ALTER TABLE party_state ADD COLUMN IF NOT EXISTS drawn_path TEXT NOT NULL DEFAULT '[]'`,
 
   `CREATE TABLE IF NOT EXISTS journeys (
      id TEXT PRIMARY KEY,
@@ -382,6 +460,7 @@ const PG_STATEMENTS = [
      from_hex TEXT NOT NULL DEFAULT '',
      to_hex TEXT NOT NULL DEFAULT '',
      route TEXT NOT NULL DEFAULT '[]',
+     drawn_path TEXT NOT NULL DEFAULT '[]',
      route_index INTEGER NOT NULL DEFAULT 0,
      status TEXT NOT NULL DEFAULT 'active',
      mounted BOOLEAN NOT NULL DEFAULT false,
@@ -397,6 +476,7 @@ const PG_STATEMENTS = [
      created_at TEXT NOT NULL DEFAULT (${PG_NOW}),
      ended_at TEXT
    )`,
+  `ALTER TABLE journeys ADD COLUMN IF NOT EXISTS drawn_path TEXT NOT NULL DEFAULT '[]'`,
 
   `CREATE TABLE IF NOT EXISTS journey_events (
      id TEXT PRIMARY KEY,
@@ -543,6 +623,64 @@ const PG_STATEMENTS = [
      created_at TEXT NOT NULL DEFAULT (${PG_NOW}),
      updated_at TEXT NOT NULL DEFAULT (${PG_NOW})
    )`,
+
+  `CREATE TABLE IF NOT EXISTS adversaries (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     category TEXT NOT NULL DEFAULT 'Other',
+     distinctive_features TEXT NOT NULL DEFAULT '',
+     size TEXT NOT NULL DEFAULT 'human',
+     attribute_level INTEGER NOT NULL DEFAULT 0,
+     endurance INTEGER NOT NULL DEFAULT 0,
+     might INTEGER NOT NULL DEFAULT 0,
+     hate_resolve INTEGER NOT NULL DEFAULT 0,
+     parry INTEGER NOT NULL DEFAULT 0,
+     armour INTEGER NOT NULL DEFAULT 0,
+     combat_proficiencies TEXT NOT NULL DEFAULT '[]',
+     fell_abilities TEXT NOT NULL DEFAULT '[]',
+     notes TEXT NOT NULL DEFAULT '',
+     source TEXT NOT NULL DEFAULT 'custom',
+     created_at TEXT NOT NULL DEFAULT (${PG_NOW}),
+     updated_at TEXT NOT NULL DEFAULT (${PG_NOW})
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS combatants (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     adversary_id TEXT,
+     category TEXT NOT NULL DEFAULT 'Other',
+     size TEXT NOT NULL DEFAULT 'human',
+     attribute_level INTEGER NOT NULL DEFAULT 0,
+     parry INTEGER NOT NULL DEFAULT 0,
+     armour INTEGER NOT NULL DEFAULT 0,
+     might INTEGER NOT NULL DEFAULT 0,
+     hate_resolve INTEGER NOT NULL DEFAULT 0,
+     hate_resolve_spent INTEGER NOT NULL DEFAULT 0,
+     combat_proficiencies TEXT NOT NULL DEFAULT '[]',
+     fell_abilities TEXT NOT NULL DEFAULT '[]',
+     current_endurance INTEGER NOT NULL DEFAULT 0,
+     max_endurance INTEGER NOT NULL DEFAULT 0,
+     wound_threshold INTEGER NOT NULL DEFAULT 1,
+     wounds_taken INTEGER NOT NULL DEFAULT 0,
+     status TEXT NOT NULL DEFAULT 'active',
+     weary BOOLEAN NOT NULL DEFAULT false,
+     attacks_used_this_round INTEGER NOT NULL DEFAULT 0,
+     joined_round INTEGER NOT NULL DEFAULT 1,
+     notes TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL DEFAULT (${PG_NOW})
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS combat_state (
+     id TEXT PRIMARY KEY,
+     active BOOLEAN NOT NULL DEFAULT false,
+     round INTEGER NOT NULL DEFAULT 1,
+     stance_locked BOOLEAN NOT NULL DEFAULT false,
+     stances TEXT NOT NULL DEFAULT '{}',
+     engagements TEXT NOT NULL DEFAULT '{}',
+     acted_players TEXT NOT NULL DEFAULT '[]',
+     pending_modifiers TEXT NOT NULL DEFAULT '{}',
+     updated_at TEXT NOT NULL DEFAULT (${PG_NOW})
+   )`,
 ];
 
 /** Insert the singleton campaign/party/travel rows if they don't exist yet — portable via Drizzle. */
@@ -558,6 +696,10 @@ async function seedSingletons() {
   const [travel] = await db.select({ id: schema.travelState.id }).from(schema.travelState).where(eq(schema.travelState.id, 'singleton'));
   if (!travel) {
     await db.insert(schema.travelState).values({ id: 'singleton', phase: 'idle' });
+  }
+  const [combat] = await db.select({ id: schema.combatState.id }).from(schema.combatState).where(eq(schema.combatState.id, 'singleton'));
+  if (!combat) {
+    await db.insert(schema.combatState).values({ id: 'singleton', active: false, round: 1 });
   }
 }
 

@@ -98,6 +98,10 @@ function RollModal({ config, onClose }) {
     try {
       const body = {
         characterId: config.characterId ?? undefined,
+        // Only meaningful when there's no characterId (an adversary-triggered
+        // combat roll, say) — performRoll() falls back to the sheet's own name
+        // whenever a characterId is given, so this never overrides that.
+        actorName: config.actorName ?? undefined,
         skill: config.skill ?? undefined,
         kind: config.kind ?? 'skill',
         label: config.label ?? config.skill ?? 'Roll',
@@ -109,6 +113,9 @@ function RollModal({ config, onClose }) {
         bonus: Number(form.bonus),
         hopeSpent: form.hopeSpent,
         whisperTo: form.whisperTo,
+        // Passthrough for callers whose endpoint needs more than a plain roll —
+        // the Combat Tracker's combatantId, weapon Damage/Injury, and so on.
+        ...(config.extraBody ?? {}),
       };
       const url = config.endpoint ?? (config.characterId ? `/characters/${config.characterId}/roll` : '/rolls');
       const data = await api.post(url, body);

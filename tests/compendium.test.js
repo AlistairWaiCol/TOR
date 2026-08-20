@@ -34,10 +34,10 @@ import {
 } from '../shared/character.js';
 
 describe('Compendium sections', () => {
-  it('declares the five sections, with Virtues split general vs cultural', () => {
+  it('declares the six sections, with Virtues split general vs cultural', () => {
     assert.deepEqual(
       COMPENDIUM_SECTIONS.map((s) => s.key),
-      ['virtues', 'culturalVirtues', 'rewards', 'items', 'locations'],
+      ['virtues', 'culturalVirtues', 'rewards', 'items', 'locations', 'adversaries'],
     );
     assert.equal(COMPENDIUM_SECTIONS.find((s) => s.key === 'virtues').label, 'General Virtues');
     assert.equal(

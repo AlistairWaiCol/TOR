@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { journeyTickSequence } from '@shared/journey.js';
+import { DEFAULT_DAY_HOLD_SECONDS, journeyTickSequence } from '@shared/journey.js';
 import { hexKey } from '@shared/hexMath.js';
 
 /**
@@ -20,9 +20,6 @@ import { hexKey } from '@shared/hexMath.js';
  * journey and resets only when a new journey starts.
  */
 
-/** How long one day sits on screen before the next tick. */
-export const DAY_HOLD_MS = 5000;
-
 /** Mishap / Short Cut. Applied instantly, never animated. */
 function adjustmentBanner(delta) {
   if (!delta) return '';
@@ -35,8 +32,12 @@ function adjustmentBanner(delta) {
  * @param {object} opts
  * @param {object|null} opts.journey the live journey record from the snapshot
  * @param {Array} opts.hexes tagged hexes, for the hard-terrain lookup
+ * @param {number} [opts.dayHoldSeconds] GM-configurable, from campaign state
+ *   (Map Calibration screen). Falls back to the shared default if the
+ *   campaign snapshot hasn't loaded yet.
  */
-export function useTravelDayTicker({ journey, hexes = [] }) {
+export function useTravelDayTicker({ journey, hexes = [], dayHoldSeconds = DEFAULT_DAY_HOLD_SECONDS }) {
+  const holdMs = (Number(dayHoldSeconds) || DEFAULT_DAY_HOLD_SECONDS) * 1000;
   // The march-day count only. Mishap / Short Cut adjustments are added on for
   // display straight from the journey record, so they land the instant the
   // event resolves without the animation having to know about them.
@@ -142,9 +143,9 @@ export function useTravelDayTicker({ journey, hexes = [] }) {
     const [next, ...rest] = queue;
     setMarchDay(next.day);
     if (next.moved) setHex(next.hex);
-    const t = setTimeout(() => setQueue(rest), DAY_HOLD_MS);
+    const t = setTimeout(() => setQueue(rest), holdMs);
     return () => clearTimeout(t);
-  }, [queue]);
+  }, [queue, holdMs]);
 
   /** Jump to the end of whatever is still queued. */
   const skip = useCallback(() => {

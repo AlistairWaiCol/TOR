@@ -47,6 +47,36 @@ export default function Calibration() {
   const [busy, setBusy] = useState(false);
   const [file, setFile] = useState(null);
 
+  // Day-animation pause, a campaign-wide setting (not calibration-specific) —
+  // parked here for now since this is the only settings-ish screen the GM
+  // has; may move to a dedicated settings page later.
+  const [campaignData, setCampaignData] = useState(null);
+  const [dayHoldSeconds, setDayHoldSeconds] = useState(null);
+
+  const loadCampaign = () => api.get('/campaign').then(setCampaignData).catch((e) => setError(e.message));
+
+  useEffect(() => {
+    loadCampaign();
+  }, []);
+
+  useEffect(() => {
+    if (campaignData?.campaign && dayHoldSeconds === null) {
+      setDayHoldSeconds(campaignData.campaign.dayHoldSeconds);
+    }
+  }, [campaignData, dayHoldSeconds]);
+
+  const saveDayHold = async () => {
+    setError('');
+    try {
+      await api.patch('/campaign', { dayHoldSeconds: Number(dayHoldSeconds) });
+      await loadCampaign();
+      refresh();
+      flash('Day-animation pause saved.');
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
   const load = async () => {
     try {
       const d = await api.get('/map/calibrations');
@@ -193,6 +223,31 @@ export default function Calibration() {
 
       {error ? <div className="error-box">{error}</div> : null}
       {status ? <div className="info-box">{status}</div> : null}
+
+      <div className="panel">
+        <h2>Travel animation</h2>
+        <p className="small muted">
+          How long each day holds on screen while a journey leg plays out on the map. A campaign-wide
+          setting — lives here for now, may move to a settings page later.
+        </p>
+        {dayHoldSeconds === null ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          <div className="row">
+            <NumField
+              label="Seconds per day"
+              value={dayHoldSeconds}
+              onChange={setDayHoldSeconds}
+              min={campaignData?.dayHoldSecondsRange?.[0] ?? 1}
+              max={campaignData?.dayHoldSecondsRange?.[1] ?? 30}
+              step={1}
+            />
+            <button className="primary" onClick={saveDayHold}>
+              Save
+            </button>
+          </div>
+        )}
+      </div>
 
       <div className="panel">
         <h2>Map image</h2>

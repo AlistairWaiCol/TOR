@@ -22,6 +22,8 @@ export const campaignState = sqliteTable('campaign_state', {
   tnBase: integer('tn_base').notNull().default(20), // 18 = short-campaign variant
   name: text('name').notNull().default('Darkening of Mirkwood'),
   notes: text('notes').notNull().default(''),
+  // How long one day holds on screen during the live travel animation (§ TravelDayTicker).
+  dayHoldSeconds: integer('day_hold_seconds').notNull().default(5),
   updatedAt: text('updated_at').notNull().default(now),
 });
 
@@ -87,6 +89,11 @@ export const partyState = sqliteTable('party_state', {
   currentCol: integer('current_col'),
   currentRow: integer('current_row'),
   route: text('route').notNull().default('[]'), // JSON [{col,row}]
+  // The raw freehand stroke behind the current route, in original-image pixel
+  // coordinates — JSON [{x,y}]. Kept alongside the snapped hex `route` purely
+  // for display: the player-side map draws this smooth line instead of the
+  // hex-by-hex highlight, while every hex-based game rule keeps reading `route`.
+  drawnPath: text('drawn_path').notNull().default('[]'),
   routeLocked: integer('route_locked', { mode: 'boolean' }).notNull().default(false),
   mounted: integer('mounted', { mode: 'boolean' }).notNull().default(false),
   forcedMarch: integer('forced_march', { mode: 'boolean' }).notNull().default(false),
@@ -104,6 +111,9 @@ export const journeys = sqliteTable('journeys', {
   fromHex: text('from_hex').notNull().default(''),
   toHex: text('to_hex').notNull().default(''),
   route: text('route').notNull().default('[]'), // JSON [{col,row}]
+  // Snapshot of party_state.drawnPath at the moment this journey started — see
+  // partyState.drawnPath above.
+  drawnPath: text('drawn_path').notNull().default('[]'),
   routeIndex: integer('route_index').notNull().default(0), // how far along the route the party is
   status: text('status').notNull().default('active'), // active | complete | abandoned
   mounted: integer('mounted', { mode: 'boolean' }).notNull().default(false),
@@ -243,6 +253,84 @@ export const culturalVirtues = sqliteTable('cultural_virtues', {
   culture: text('culture').notNull().default(''),
   source: text('source').notNull().default('custom'), // core | custom
   createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+/**
+ * Adversary/NPC Bank — reusable stat-block templates for the Combat Tracker.
+ * A `combatants` row (see below) is an independent snapshot copy taken from
+ * one of these at the moment it is added to a fight; this table itself is
+ * never touched by a fight in progress.
+ */
+export const adversaries = sqliteTable('adversaries', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''),
+  category: text('category').notNull().default('Other'), // NPCs|Evil Men|Orcs|Trolls|Wolves|Undead|Spiders|Other
+  distinctiveFeatures: text('distinctive_features').notNull().default(''),
+  size: text('size').notNull().default('human'), // human | large
+  attributeLevel: integer('attribute_level').notNull().default(0),
+  endurance: integer('endurance').notNull().default(0),
+  might: integer('might').notNull().default(0),
+  // Hate (minions of the Enemy) or Resolve (non-monstrous "Evil Men") — one
+  // shared numeric field, labelled by category. See hateResolveLabel() in
+  // shared/compendium.js.
+  hateResolve: integer('hate_resolve').notNull().default(0),
+  parry: integer('parry').notNull().default(0),
+  armour: integer('armour').notNull().default(0),
+  combatProficiencies: text('combat_proficiencies').notNull().default('[]'), // JSON [{name,rating,damage,injury,special}]
+  fellAbilities: text('fell_abilities').notNull().default('[]'), // JSON [{name,description}]
+  notes: text('notes').notNull().default(''),
+  source: text('source').notNull().default('custom'),
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+/**
+ * A single fight's adversary instances — independent copies of `adversaries`
+ * rows, snapshotted at the moment the GM adds them to combat. Never written
+ * back to the bank; a fight can freely damage/rename/remove these without
+ * touching the reusable template they came from.
+ */
+export const combatants = sqliteTable('combatants', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''), // auto-numbered, e.g. "Orc Guard 2"
+  adversaryId: text('adversary_id'), // informational only — the bank entry this came from
+  category: text('category').notNull().default('Other'),
+  size: text('size').notNull().default('human'),
+  attributeLevel: integer('attribute_level').notNull().default(0),
+  parry: integer('parry').notNull().default(0),
+  armour: integer('armour').notNull().default(0),
+  might: integer('might').notNull().default(0),
+  hateResolve: integer('hate_resolve').notNull().default(0),
+  hateResolveSpent: integer('hate_resolve_spent').notNull().default(0), // resets each round
+  combatProficiencies: text('combat_proficiencies').notNull().default('[]'),
+  fellAbilities: text('fell_abilities').notNull().default('[]'),
+  currentEndurance: integer('current_endurance').notNull().default(0),
+  maxEndurance: integer('max_endurance').notNull().default(0),
+  // How many Wounds this creature can take before it's removed from the
+  // fight — 1 for almost everything; the GM may raise it per creature.
+  woundThreshold: integer('wound_threshold').notNull().default(1),
+  woundsTaken: integer('wounds_taken').notNull().default(0),
+  status: text('status').notNull().default('active'), // active | down | removed
+  // Set by a successful Intimidate Foe for the rest of the round; cleared on
+  // the next round's reset, same as attacksUsedThisRound/hateResolveSpent.
+  weary: integer('weary', { mode: 'boolean' }).notNull().default(false),
+  attacksUsedThisRound: integer('attacks_used_this_round').notNull().default(0),
+  joinedRound: integer('joined_round').notNull().default(1),
+  notes: text('notes').notNull().default(''),
+  createdAt: text('created_at').notNull().default(now),
+});
+
+/** Live shared state for the Combat Tracker — round, stances, engagements. */
+export const combatState = sqliteTable('combat_state', {
+  id: text('id').primaryKey(), // always 'singleton'
+  active: integer('active', { mode: 'boolean' }).notNull().default(false),
+  round: integer('round').notNull().default(1),
+  stanceLocked: integer('stance_locked', { mode: 'boolean' }).notNull().default(false),
+  stances: text('stances').notNull().default('{}'), // JSON { characterId: 'Forward'|'Open'|'Defensive'|'Rear' }
+  engagements: text('engagements').notNull().default('{}'), // JSON { characterId: combatantId }
+  actedPlayers: text('acted_players').notNull().default('[]'), // JSON string[] of characterIds
+  pendingModifiers: text('pending_modifiers').notNull().default('{}'), // JSON { characterId: {extraDice, note} }
   updatedAt: text('updated_at').notNull().default(now),
 });
 

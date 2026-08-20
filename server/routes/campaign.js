@@ -3,6 +3,7 @@ import { requireAuth, requireGM } from '../lib/auth.js';
 import { getCampaign, listJourneys, updateCampaign } from '../lib/store.js';
 import { SEASONS } from '../../shared/journey.js';
 import { DEFAULT_TN_BASE, SHORT_CAMPAIGN_TN_BASE } from '../../shared/dice.js';
+import { MAX_DAY_HOLD_SECONDS, MIN_DAY_HOLD_SECONDS } from '../../shared/journey.js';
 import { broadcast, broadcastSnapshot } from '../realtime.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 
@@ -17,6 +18,7 @@ router.get(
       campaign,
       seasons: SEASONS,
       tnBases: [DEFAULT_TN_BASE, SHORT_CAMPAIGN_TN_BASE],
+      dayHoldSecondsRange: [MIN_DAY_HOLD_SECONDS, MAX_DAY_HOLD_SECONDS],
       journeys: journeys.map((j) => ({
         id: j.id,
         title: j.title,
@@ -53,6 +55,15 @@ router.patch(
         return res.status(400).json({ error: 'Target Number base must be 20 or 18.' });
       }
       patch.tnBase = base;
+    }
+    if (req.body.dayHoldSeconds != null) {
+      const seconds = Number(req.body.dayHoldSeconds);
+      if (!Number.isFinite(seconds) || seconds < MIN_DAY_HOLD_SECONDS || seconds > MAX_DAY_HOLD_SECONDS) {
+        return res.status(400).json({
+          error: `Day-hold seconds must be between ${MIN_DAY_HOLD_SECONDS} and ${MAX_DAY_HOLD_SECONDS}.`,
+        });
+      }
+      patch.dayHoldSeconds = Math.round(seconds);
     }
     if (req.body.name != null) patch.name = String(req.body.name);
     if (req.body.notes != null) patch.notes = String(req.body.notes);

@@ -22,6 +22,8 @@ import {
   updateCompendiumEntry,
 } from '../lib/store.js';
 import {
+  ADVERSARY_CATEGORIES,
+  ADVERSARY_SIZES,
   COMPENDIUM_SECTIONS,
   ITEM_KINDS,
   STANDARDS_OF_LIVING,
@@ -61,6 +63,11 @@ function cleanBody(section, body = {}) {
     if ('minStandard' in out && out.minStandard && !STANDARDS_OF_LIVING.includes(out.minStandard)) {
       out.minStandard = '';
     }
+  }
+  if (section === 'adversaries') {
+    if ('category' in out && !ADVERSARY_CATEGORIES.includes(out.category)) out.category = 'Other';
+    const sizeValues = ADVERSARY_SIZES.map((s) => s.value);
+    if ('size' in out && !sizeValues.includes(out.size)) out.size = 'human';
   }
   // Only the seeder writes 'core'; anything the app creates is home-brew.
   if ('source' in out && out.source !== 'core') out.source = 'custom';

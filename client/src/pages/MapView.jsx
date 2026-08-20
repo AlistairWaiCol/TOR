@@ -185,7 +185,7 @@ export default function MapView() {
   // The live day-by-day animation. While a leg is playing out the token sits on
   // an intermediate hex rather than the leg's end — `animatedHex` is what the
   // map is fed, falling back to the real position when nothing is in flight.
-  const ticker = useTravelDayTicker({ journey, hexes });
+  const ticker = useTravelDayTicker({ journey, hexes, dayHoldSeconds: campaign?.dayHoldSeconds });
   const animatedHex = ticker.playing ? ticker.hex : null;
 
   return (
@@ -263,6 +263,7 @@ export default function MapView() {
               // party token and the route.
               showTags={isGM}
               route={route}
+              drawnPath={party?.drawnPath ?? []}
               currentHex={animatedHex ?? currentPos}
               pinHex={tstate.manualPin ?? null}
               selected={inspect && !inspect.untagged ? inspect : null}

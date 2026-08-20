@@ -127,7 +127,14 @@ export function emptyCharacterSheet() {
       favourState: 'Normal', // Normal | Favoured | Ill-Favoured
       weary: false,
       miserable: false,
+      // `wounded` is the FIRST Wound. A second Wound (see the Combat Tracker's
+      // Piercing Blow handling) skips Wound Severity entirely and sets `dying`
+      // straight away, per the core rulebook — `healingDays` is only ever set
+      // from a first Wound's Wound Severity roll, and is informational only
+      // (the GM reads the exact day count off their own physical table).
       wounded: false,
+      dying: false,
+      healingDays: 0,
       inspired: false, // not on the reference sheet; needed for the Hope-spend bonus
       injury: '',
     },

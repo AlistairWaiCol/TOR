@@ -18,6 +18,12 @@ import { mapImageUrl } from './api.js';
 const PADDING_HEXES = 0.75;
 /** Cap on the stored image's width — this lands in a database text column. */
 const MAX_WIDTH = 900;
+/**
+ * The crop never comes out narrower than this many hexes across, even for a
+ * dead-straight route — otherwise a journey that goes, say, due south renders
+ * as a tall thin sliver with almost no surrounding map for context.
+ */
+const MIN_SPAN_HEXES = 7;
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -83,6 +89,25 @@ export async function renderJourneyMap({ calibration, journey, events = [], tier
       maxY = Math.max(maxY, p.y);
     }
   }
+  // Widen the box to a minimum footprint, centred on the route actually
+  // walked, before the usual padding is added on top. Column centres are
+  // `colSpacing` apart and row centres `hexHeight` apart (see hexCenter() in
+  // shared/hexMath.js), so that many hex-steps across the minimum span, plus
+  // one hex's own width/height for the hexes at each end, is the pixel size a
+  // MIN_SPAN_HEXES-wide/tall crop needs.
+  const minWidth = (MIN_SPAN_HEXES - 1) * cal.colSpacing + cal.hexWidth;
+  const minHeight = (MIN_SPAN_HEXES - 1) * cal.hexHeight + cal.hexHeight;
+  if (maxX - minX < minWidth) {
+    const cx = (minX + maxX) / 2;
+    minX = cx - minWidth / 2;
+    maxX = cx + minWidth / 2;
+  }
+  if (maxY - minY < minHeight) {
+    const cy = (minY + maxY) / 2;
+    minY = cy - minHeight / 2;
+    maxY = cy + minHeight / 2;
+  }
+
   const padX = cal.hexWidth * PADDING_HEXES;
   const padY = cal.hexHeight * PADDING_HEXES;
   const sx = Math.max(0, Math.floor(minX - padX));

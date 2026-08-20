@@ -44,6 +44,7 @@ export const campaignState = pgTable('campaign_state', {
   tnBase: integer('tn_base').notNull().default(20),
   name: text('name').notNull().default('Darkening of Mirkwood'),
   notes: text('notes').notNull().default(''),
+  dayHoldSeconds: integer('day_hold_seconds').notNull().default(5),
   updatedAt: text('updated_at').notNull().default(now),
 });
 
@@ -107,6 +108,7 @@ export const partyState = pgTable('party_state', {
   currentCol: integer('current_col'),
   currentRow: integer('current_row'),
   route: text('route').notNull().default('[]'),
+  drawnPath: text('drawn_path').notNull().default('[]'),
   routeLocked: boolean('route_locked').notNull().default(false),
   mounted: boolean('mounted').notNull().default(false),
   forcedMarch: boolean('forced_march').notNull().default(false),
@@ -124,6 +126,7 @@ export const journeys = pgTable('journeys', {
   fromHex: text('from_hex').notNull().default(''),
   toHex: text('to_hex').notNull().default(''),
   route: text('route').notNull().default('[]'),
+  drawnPath: text('drawn_path').notNull().default('[]'),
   routeIndex: integer('route_index').notNull().default(0),
   status: text('status').notNull().default('active'),
   mounted: boolean('mounted').notNull().default(false),
@@ -243,6 +246,64 @@ export const culturalVirtues = pgTable('cultural_virtues', {
   culture: text('culture').notNull().default(''),
   source: text('source').notNull().default('custom'),
   createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+export const adversaries = pgTable('adversaries', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''),
+  category: text('category').notNull().default('Other'),
+  distinctiveFeatures: text('distinctive_features').notNull().default(''),
+  size: text('size').notNull().default('human'),
+  attributeLevel: integer('attribute_level').notNull().default(0),
+  endurance: integer('endurance').notNull().default(0),
+  might: integer('might').notNull().default(0),
+  hateResolve: integer('hate_resolve').notNull().default(0),
+  parry: integer('parry').notNull().default(0),
+  armour: integer('armour').notNull().default(0),
+  combatProficiencies: text('combat_proficiencies').notNull().default('[]'),
+  fellAbilities: text('fell_abilities').notNull().default('[]'),
+  notes: text('notes').notNull().default(''),
+  source: text('source').notNull().default('custom'),
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
+});
+
+export const combatants = pgTable('combatants', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().default(''),
+  adversaryId: text('adversary_id'),
+  category: text('category').notNull().default('Other'),
+  size: text('size').notNull().default('human'),
+  attributeLevel: integer('attribute_level').notNull().default(0),
+  parry: integer('parry').notNull().default(0),
+  armour: integer('armour').notNull().default(0),
+  might: integer('might').notNull().default(0),
+  hateResolve: integer('hate_resolve').notNull().default(0),
+  hateResolveSpent: integer('hate_resolve_spent').notNull().default(0),
+  combatProficiencies: text('combat_proficiencies').notNull().default('[]'),
+  fellAbilities: text('fell_abilities').notNull().default('[]'),
+  currentEndurance: integer('current_endurance').notNull().default(0),
+  maxEndurance: integer('max_endurance').notNull().default(0),
+  woundThreshold: integer('wound_threshold').notNull().default(1),
+  woundsTaken: integer('wounds_taken').notNull().default(0),
+  status: text('status').notNull().default('active'),
+  weary: boolean('weary').notNull().default(false),
+  attacksUsedThisRound: integer('attacks_used_this_round').notNull().default(0),
+  joinedRound: integer('joined_round').notNull().default(1),
+  notes: text('notes').notNull().default(''),
+  createdAt: text('created_at').notNull().default(now),
+});
+
+export const combatState = pgTable('combat_state', {
+  id: text('id').primaryKey(),
+  active: boolean('active').notNull().default(false),
+  round: integer('round').notNull().default(1),
+  stanceLocked: boolean('stance_locked').notNull().default(false),
+  stances: text('stances').notNull().default('{}'),
+  engagements: text('engagements').notNull().default('{}'),
+  actedPlayers: text('acted_players').notNull().default('[]'),
+  pendingModifiers: text('pending_modifiers').notNull().default('{}'),
   updatedAt: text('updated_at').notNull().default(now),
 });
 

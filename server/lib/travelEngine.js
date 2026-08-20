@@ -158,6 +158,7 @@ export async function startJourney({ fromLabel, toLabel, title } = {}) {
     fromHex: hexKey(first.col, first.row),
     toHex: hexKey(last.col, last.row),
     route,
+    drawnPath: party.drawnPath || [],
     mounted: party.mounted,
     forcedMarch: party.forcedMarch,
     roles: party.roles,

@@ -39,6 +39,10 @@ router.patch(
         col: Number(h.col),
         row: Number(h.row),
       }));
+      // A route set this way (hex clicks, not a freehand stroke) has no drawn
+      // line behind it — clear any stale one so the player map does not keep
+      // showing an old freehand path over an unrelated new route.
+      patch.drawnPath = [];
     }
     if (req.body.mounted != null) patch.mounted = Boolean(req.body.mounted);
     if (req.body.forcedMarch != null) {
@@ -109,7 +113,7 @@ router.post(
     if (party.routeLocked && !req.isGM) {
       return res.status(403).json({ error: 'The route is locked by the GM.' });
     }
-    const updated = await updateParty({ route: [], routeLocked: false });
+    const updated = await updateParty({ route: [], drawnPath: [], routeLocked: false });
     broadcast('party:update', updated);
     await broadcastSnapshot();
     return res.json({ party: updated });
@@ -146,7 +150,10 @@ router.post(
     const route = snapPathToHexes(points, calibration);
     if (route.length < 1) return res.status(400).json({ error: 'That line did not cross any hex.' });
 
-    const updated = await updateParty({ route });
+    // The raw trail is kept alongside the snapped route so the player-side map
+    // can draw the smooth line the player actually traced, instead of the
+    // hex-by-hex highlight — see HexMap.jsx's `drawnPath` handling.
+    const updated = await updateParty({ route, drawnPath: points });
     broadcast('party:update', updated);
     await broadcastSnapshot();
     return res.json({ party: updated, route });

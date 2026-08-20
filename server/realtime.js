@@ -18,6 +18,8 @@ import {
   getJourney,
   listJourneyEvents,
   listCompendium,
+  getCombatState,
+  listCombatants,
 } from './lib/store.js';
 
 let io = null;
@@ -36,15 +38,18 @@ export function broadcastToGM(event, payload) {
 
 /** Full snapshot of everything the live map view needs. */
 export async function buildSnapshot() {
-  const [campaign, party, travel, characters, calibration, locationList] = await Promise.all([
-    getCampaign(),
-    getParty(),
-    getTravelState(),
-    listCharacters(),
-    getActiveCalibration(),
-    // The live map needs Locations to resolve a hex's linkedLocationId.
-    listCompendium('locations'),
-  ]);
+  const [campaign, party, travel, characters, calibration, locationList, combat, combatants] =
+    await Promise.all([
+      getCampaign(),
+      getParty(),
+      getTravelState(),
+      listCharacters(),
+      getActiveCalibration(),
+      // The live map needs Locations to resolve a hex's linkedLocationId.
+      listCompendium('locations'),
+      getCombatState(),
+      listCombatants(),
+    ]);
   const hexList = calibration ? await listHexes(calibration.id) : [];
   let journey = null;
   let events = [];
@@ -61,6 +66,8 @@ export async function buildSnapshot() {
     calibration,
     hexes: hexList,
     locations: locationList,
+    combat,
+    combatants,
     characters: characters.map((c) => ({
       id: c.id,
       name: c.name,
@@ -118,7 +125,9 @@ export function attachRealtime(httpServer) {
         const route = Array.isArray(payload?.route)
           ? payload.route.map((h) => ({ col: Number(h.col), row: Number(h.row) }))
           : [];
-        const updated = await updateParty({ route });
+        // Hex-click route building has no freehand stroke behind it — clear any
+        // stale drawn line left over from an earlier freehand route.
+        const updated = await updateParty({ route, drawnPath: [] });
         io.emit('party:update', updated);
         await broadcastSnapshot();
         if (ack) ack({ ok: true, party: updated });

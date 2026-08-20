@@ -19,6 +19,7 @@ export const COMPENDIUM_SECTIONS = [
   { key: 'rewards', label: 'Rewards', singular: 'Reward' },
   { key: 'items', label: 'Weapons & Armour', singular: 'Item' },
   { key: 'locations', label: 'Locations', singular: 'Location' },
+  { key: 'adversaries', label: 'Adversaries', singular: 'Adversary' },
 ];
 
 export const SECTION_KEYS = COMPENDIUM_SECTIONS.map((s) => s.key);
@@ -230,6 +231,75 @@ export function coreCatalogueItems() {
 
 export function emptyLocation() {
   return { name: '', years: [], keyInfo: '' };
+}
+
+/* --- Adversary/NPC Bank ------------------------------------------------------
+ * Reusable stat-block templates for the Combat Tracker. A combatant added to a
+ * fight is an independent snapshot copy of one of these — see server/lib/store.js's
+ * combat functions — so nothing here is ever mutated by a fight in progress.
+ */
+
+export const ADVERSARY_CATEGORIES = [
+  'NPCs',
+  'Evil Men',
+  'Orcs',
+  'Trolls',
+  'Wolves',
+  'Undead',
+  'Spiders',
+  'Other',
+];
+
+export const ADVERSARY_SIZES = [
+  { value: 'human', label: 'Human-sized' },
+  { value: 'large', label: 'Large' },
+];
+
+/**
+ * Hate (minions of the Enemy — Orcs, Trolls, Wolves, Undead, Spiders, most
+ * monsters — fight to the death) or Resolve (non-monstrous "Evil Men", who
+ * may yield or flee) — one shared numeric field on the entry, labelled by its
+ * category.
+ *
+ * `NPCs` is folded in with `Evil Men` under Resolve: both are non-monstrous,
+ * even though the spec only names Evil Men explicitly — a judgment call, easy
+ * to revisit if an NPC entry really should fight like a monster.
+ */
+export function hateResolveLabel(category) {
+  return category === 'Evil Men' || category === 'NPCs' ? 'Resolve' : 'Hate';
+}
+
+/** One-line nudge on Resolve entries only — not a tracked system, just a reminder. */
+export function misdeedReminder(category) {
+  if (hateResolveLabel(category) !== 'Resolve') return '';
+  return 'Attacking this foe may be a Misdeed — was the fight provoked or unavoidable?';
+}
+
+export function emptyCombatProficiency() {
+  return { name: '', rating: 0, damage: 0, injury: 0, special: '' };
+}
+
+export function emptyFellAbility() {
+  return { name: '', description: '' };
+}
+
+export function emptyAdversary() {
+  return {
+    name: '',
+    category: 'Other',
+    distinctiveFeatures: '',
+    size: 'human',
+    attributeLevel: 0,
+    endurance: 0,
+    might: 0,
+    hateResolve: 0,
+    parry: 0,
+    armour: 0,
+    combatProficiencies: [],
+    fellAbilities: [],
+    notes: '',
+    source: 'custom',
+  };
 }
 
 /** Turn a catalogue row into the weapon shape `sheet.weapons` holds. */

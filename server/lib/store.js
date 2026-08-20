@@ -6,13 +6,16 @@
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { hydrateSheet } from '../../shared/character.js';
-import { SEASONS, isCharacterTravelling } from '../../shared/journey.js';
+import { DEFAULT_DAY_HOLD_SECONDS, SEASONS, isCharacterTravelling } from '../../shared/journey.js';
 import { DEFAULT_CALIBRATION, hexKey } from '../../shared/hexMath.js';
 
 const {
   adventureNotes,
+  adversaries,
   campaignState,
   characters,
+  combatState,
+  combatants,
   culturalVirtues,
   handouts,
   hexes,
@@ -55,12 +58,13 @@ export async function getCampaign() {
     tnBase: 20,
     name: 'Darkening of Mirkwood',
     notes: '',
+    dayHoldSeconds: DEFAULT_DAY_HOLD_SECONDS,
   };
   return { ...row };
 }
 
 export async function updateCampaign(patch) {
-  const allowed = ['year', 'season', 'tnBase', 'name', 'notes'];
+  const allowed = ['year', 'season', 'tnBase', 'name', 'notes', 'dayHoldSeconds'];
   const values = {};
   for (const key of allowed) if (key in patch) values[key] = patch[key];
   values.updatedAt = new Date().toISOString();
@@ -338,6 +342,7 @@ function toParty(row) {
   return {
     ...row,
     route: parseJson(row.route, []),
+    drawnPath: parseJson(row.drawnPath, []),
     roles: parseJson(row.roles, {}),
   };
 }
@@ -357,6 +362,7 @@ export async function updateParty(patch) {
   if ('currentCol' in patch) values.currentCol = patch.currentCol;
   if ('currentRow' in patch) values.currentRow = patch.currentRow;
   if ('route' in patch) values.route = JSON.stringify(patch.route ?? []);
+  if ('drawnPath' in patch) values.drawnPath = JSON.stringify(patch.drawnPath ?? []);
   if ('routeLocked' in patch) values.routeLocked = Boolean(patch.routeLocked);
   if ('mounted' in patch) values.mounted = Boolean(patch.mounted);
   if ('forcedMarch' in patch) values.forcedMarch = Boolean(patch.forcedMarch);
@@ -407,6 +413,7 @@ function toJourney(row) {
   return {
     ...row,
     route: parseJson(row.route, []),
+    drawnPath: parseJson(row.drawnPath, []),
     roles: parseJson(row.roles, {}),
     summary: parseJson(row.summary, {}),
   };
@@ -434,6 +441,7 @@ export async function createJourney(values) {
     fromHex: values.fromHex || '',
     toHex: values.toHex || '',
     route: JSON.stringify(values.route || []),
+    drawnPath: JSON.stringify(values.drawnPath || []),
     routeIndex: 0,
     status: 'active',
     mounted: Boolean(values.mounted),
@@ -466,6 +474,7 @@ export async function updateJourney(id, patch) {
   const values = {};
   for (const key of JOURNEY_FIELDS) if (key in patch) values[key] = patch[key];
   if ('route' in patch) values.route = JSON.stringify(patch.route ?? []);
+  if ('drawnPath' in patch) values.drawnPath = JSON.stringify(patch.drawnPath ?? []);
   if ('roles' in patch) values.roles = JSON.stringify(patch.roles ?? {});
   if ('summary' in patch) values.summary = JSON.stringify(patch.summary ?? {});
   if (Object.keys(values).length === 0) return getJourney(id);
@@ -568,9 +577,10 @@ export async function nextEventSeq(journeyId) {
 }
 
 /* --- compendium --------------------------------------------------------------
- * Four sections with the same CRUD shape, described as data so the routes stay
- * one generic handler and a fifth section (NPCs, Bestiary) is a table plus a
- * row here.
+ * Every section shares the same CRUD shape, described as data so the routes
+ * stay one generic handler — adding a new one (as `adversaries` did) is just
+ * another table plus a row here and in shared/compendium.js's
+ * COMPENDIUM_SECTIONS.
  */
 
 function toVirtue(row) {
@@ -588,6 +598,15 @@ function toRewardDefinition(row) {
 
 function toCatalogueItem(row) {
   return row ? { ...row } : null;
+}
+
+function toAdversary(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    combatProficiencies: parseJson(row.combatProficiencies, []),
+    fellAbilities: parseJson(row.fellAbilities, []),
+  };
 }
 
 function toLocation(row) {
@@ -664,6 +683,42 @@ const COMPENDIUM_TABLES = {
     jsonFields: ['years'],
     defaults: { name: '', keyInfo: '' },
     jsonDefaults: { years: [] },
+  },
+  adversaries: {
+    table: adversaries,
+    hydrate: toAdversary,
+    order: (t) => asc(t.name),
+    fields: [
+      'name',
+      'category',
+      'distinctiveFeatures',
+      'size',
+      'attributeLevel',
+      'endurance',
+      'might',
+      'hateResolve',
+      'parry',
+      'armour',
+      'notes',
+      'source',
+    ],
+    numericFields: ['attributeLevel', 'endurance', 'might', 'hateResolve', 'parry', 'armour'],
+    jsonFields: ['combatProficiencies', 'fellAbilities'],
+    defaults: {
+      name: '',
+      category: 'Other',
+      distinctiveFeatures: '',
+      size: 'human',
+      attributeLevel: 0,
+      endurance: 0,
+      might: 0,
+      hateResolve: 0,
+      parry: 0,
+      armour: 0,
+      notes: '',
+      source: 'custom',
+    },
+    jsonDefaults: { combatProficiencies: [], fellAbilities: [] },
   },
 };
 
@@ -944,4 +999,121 @@ export async function rollsForJourney(journeyId) {
     .where(eq(rolls.journeyId, journeyId))
     .orderBy(asc(rolls.createdAt));
   return rows.map(toRoll);
+}
+
+/* --- combat ------------------------------------------------------------------
+ * Live shared state for the Combat Tracker (combat_state, singleton) and the
+ * per-fight adversary instances it tracks (combatants). Mirrors the
+ * party_state / travel_state split above: one small singleton for "what round
+ * and phase are we in", one list table for the things that come and go.
+ */
+
+function toCombatState(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    stances: parseJson(row.stances, {}),
+    engagements: parseJson(row.engagements, {}),
+    actedPlayers: parseJson(row.actedPlayers, []),
+    pendingModifiers: parseJson(row.pendingModifiers, {}),
+  };
+}
+
+export async function getCombatState() {
+  const rows = await db.select().from(combatState).where(eq(combatState.id, SINGLETON));
+  if (!rows[0]) {
+    await db.insert(combatState).values({ id: SINGLETON, active: false, round: 1 });
+    return getCombatState();
+  }
+  return toCombatState(rows[0]);
+}
+
+export async function setCombatState(patch) {
+  const values = {};
+  if ('active' in patch) values.active = Boolean(patch.active);
+  if ('round' in patch) values.round = Number(patch.round) || 1;
+  if ('stanceLocked' in patch) values.stanceLocked = Boolean(patch.stanceLocked);
+  if ('stances' in patch) values.stances = JSON.stringify(patch.stances ?? {});
+  if ('engagements' in patch) values.engagements = JSON.stringify(patch.engagements ?? {});
+  if ('actedPlayers' in patch) values.actedPlayers = JSON.stringify(patch.actedPlayers ?? []);
+  if ('pendingModifiers' in patch) values.pendingModifiers = JSON.stringify(patch.pendingModifiers ?? {});
+  values.updatedAt = new Date().toISOString();
+  await db.update(combatState).set(values).where(eq(combatState.id, SINGLETON));
+  return getCombatState();
+}
+
+function toCombatant(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    combatProficiencies: parseJson(row.combatProficiencies, []),
+    fellAbilities: parseJson(row.fellAbilities, []),
+  };
+}
+
+export async function listCombatants() {
+  const rows = await db.select().from(combatants).orderBy(asc(combatants.createdAt));
+  return rows.map(toCombatant);
+}
+
+export async function getCombatantRow(id) {
+  const rows = await db.select().from(combatants).where(eq(combatants.id, id));
+  return toCombatant(rows[0]);
+}
+
+/** A snapshot copy of an Adversary/NPC Bank entry, ready to fight — never a live link to it. */
+export async function createCombatant(values) {
+  const id = newId();
+  await db.insert(combatants).values({
+    id,
+    name: values.name || '',
+    adversaryId: values.adversaryId ?? null,
+    category: values.category || 'Other',
+    size: values.size || 'human',
+    attributeLevel: Number(values.attributeLevel) || 0,
+    parry: Number(values.parry) || 0,
+    armour: Number(values.armour) || 0,
+    might: Number(values.might) || 0,
+    hateResolve: Number(values.hateResolve) || 0,
+    hateResolveSpent: 0,
+    combatProficiencies: JSON.stringify(values.combatProficiencies || []),
+    fellAbilities: JSON.stringify(values.fellAbilities || []),
+    currentEndurance: Number(values.currentEndurance) || 0,
+    maxEndurance: Number(values.maxEndurance) || 0,
+    woundThreshold: Number(values.woundThreshold) || 1,
+    woundsTaken: 0,
+    status: 'active',
+    weary: false,
+    attacksUsedThisRound: 0,
+    joinedRound: Number(values.joinedRound) || 1,
+    notes: values.notes || '',
+    createdAt: new Date().toISOString(),
+  });
+  return getCombatantRow(id);
+}
+
+const COMBATANT_FIELDS = [
+  'name',
+  'currentEndurance',
+  'maxEndurance',
+  'woundThreshold',
+  'woundsTaken',
+  'status',
+  'weary',
+  'attacksUsedThisRound',
+  'hateResolveSpent',
+  'notes',
+];
+
+export async function updateCombatantRow(id, patch) {
+  const values = {};
+  for (const key of COMBATANT_FIELDS) if (key in patch) values[key] = patch[key];
+  if (Object.keys(values).length === 0) return getCombatantRow(id);
+  await db.update(combatants).set(values).where(eq(combatants.id, id));
+  return getCombatantRow(id);
+}
+
+export async function deleteAllCombatants() {
+  await db.delete(combatants);
+  return true;
 }

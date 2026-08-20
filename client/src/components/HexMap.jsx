@@ -57,6 +57,12 @@ export default function HexMap({
   showGrid = true,
   showTags = true,
   route = [],
+  // The raw freehand stroke behind `route`, in ORIGINAL-image pixel coordinates
+  // — [{x,y}]. Only drawn when `freehand` is true: the player-side map shows
+  // the smooth line the player actually traced instead of the hex-by-hex
+  // highlight below, which stays the GM's view (exact hex boundaries matter to
+  // them, not to a player).
+  drawnPath = [],
   currentHex = null,
   pinHex = null,
   selected = null,
@@ -234,8 +240,26 @@ export default function HexMap({
       }
     }
 
-    // Route
-    if (route.length) {
+    // Route. On the player-side (freehand) map, a stored drawn path is shown as
+    // the smooth line the player actually traced, instead of the hex-by-hex
+    // highlight below — the GM keeps the hex view, where exact boundaries matter.
+    if (freehand && drawnPath.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(240, 214, 139, 0.9)';
+      ctx.lineWidth = Math.max(2.5, cal.hexHeight * 0.1);
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+      ctx.shadowBlur = 3;
+      ctx.beginPath();
+      drawnPath.forEach((p, i) => {
+        const x = p.x * s;
+        const y = p.y * s;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.restore();
+    } else if (route.length) {
       route.forEach((hx, i) => {
         tracePoly(hx.col, hx.row);
         ctx.fillStyle = i === route.length - 1 ? 'rgba(200, 162, 74, 0.5)' : 'rgba(200, 162, 74, 0.28)';
@@ -318,7 +342,7 @@ export default function HexMap({
       ctx.stroke();
       ctx.restore();
     }
-  }, [calibration, chosenTier, image, pin, zoom, showGrid, showTags, hexIndex, route, currentHex, pinHex, selected]);
+  }, [calibration, chosenTier, image, pin, zoom, showGrid, showTags, hexIndex, route, drawnPath, freehand, currentHex, pinHex, selected]);
 
   /** Coalesce stroke redraws to one per animation frame. */
   const scheduleRedraw = useCallback(() => {

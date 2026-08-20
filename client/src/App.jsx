@@ -11,14 +11,17 @@ import JourneyDetail from './pages/JourneyDetail.jsx';
 import Compendium from './pages/Compendium.jsx';
 import Handouts from './pages/Handouts.jsx';
 import AdventureNotes from './pages/AdventureNotes.jsx';
-import ComingSoon from './pages/ComingSoon.jsx';
+import CombatTracker from './pages/CombatTracker.jsx';
 import TurnPrompt from './components/TurnPrompt.jsx';
+import CombatTurnPrompt from './components/CombatTurnPrompt.jsx';
 
 /**
- * Nav is data-driven so the v2 sections (combat tracker, bestiary) can be
- * switched on by swapping `soon: true` for a real component — no layout or
- * routing rewrite needed. Handouts, the Compendium and now Adventure Notes were
- * all promoted out of "Later" that way.
+ * Nav is data-driven so a v2 section can be switched on by swapping
+ * `soon: true` for a real component — no layout or routing rewrite needed.
+ * Handouts, the Compendium, Adventure Notes and now the Combat Tracker were
+ * all promoted out of "Later" that way. NPCs/Bestiary ended up folded into
+ * the Compendium's own Adversaries section rather than a separate page, so
+ * there's nothing left in "Later" for the moment.
  */
 const NAV = [
   { section: 'Campaign' },
@@ -30,11 +33,10 @@ const NAV = [
   { section: 'Travel' },
   { to: '/map', label: 'Map & Travel' },
   { to: '/journeys', label: 'Journey Log' },
+  { section: 'Combat' },
+  { to: '/combat', label: 'Combat Tracker' },
   { section: 'Game Master', gmOnly: true },
   { to: '/calibration', label: 'Map Calibration', gmOnly: true },
-  { section: 'Later' },
-  { to: '/combat', label: 'Combat Tracker', soon: true },
-  { to: '/bestiary', label: 'Bestiary & NPCs', soon: true },
 ];
 
 /**
@@ -165,14 +167,14 @@ export default function App() {
           />
           <Route path="/journeys" element={<Journeys />} />
           <Route path="/journeys/:id" element={<JourneyDetail />} />
-          <Route path="/combat" element={<ComingSoon title="Combat Tracker" />} />
-          <Route path="/bestiary" element={<ComingSoon title="Bestiary & NPCs" />} />
+          <Route path="/combat" element={<CombatTracker />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
       {/* At the shell, not inside the Map page: "it's your turn" is most useful
           to a player who is looking at something else. */}
       <TurnPrompt />
+      <CombatTurnPrompt />
     </div>
   );
 }

@@ -7,6 +7,11 @@ import { EYE, GANDALF } from './dice.js';
 
 export const SEASONS = ['Spring', 'Summer', 'Autumn', 'Winter'];
 
+/** How long one day holds on screen during the live travel animation, by default. */
+export const DEFAULT_DAY_HOLD_SECONDS = 5;
+export const MIN_DAY_HOLD_SECONDS = 1;
+export const MAX_DAY_HOLD_SECONDS = 30;
+
 export const REGION_TYPES = [
   { key: 'border', label: 'Border Land', featMode: 'favoured' },
   { key: 'wild', label: 'Wild Land', featMode: 'normal' },
