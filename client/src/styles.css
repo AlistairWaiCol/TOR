@@ -593,6 +593,37 @@ td select {
   padding: 10px 12px;
 }
 
+/* One row per adversary, inside an open category — collapsed to just the
+   name until clicked, so a large category doesn't dump every stat block at
+   once. */
+.entry-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #2c261e;
+  padding: 7px 4px;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+.entry-row:hover {
+  color: var(--gold);
+  border-color: var(--gold-dim);
+}
+.entry-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px 4px 0 0;
+  padding: 6px 8px;
+  color: var(--gold);
+  font-size: 0.85rem;
+  margin-bottom: -1px;
+}
+
 .roll-feed {
   max-height: 340px
 ;

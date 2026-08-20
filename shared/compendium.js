@@ -247,9 +247,9 @@ export const ADVERSARY_CATEGORIES = [
   'Wolves',
   'Undead',
   'Spiders',
-  'Monster',
-  'Unique',
-  'Other',
+  'Nazgul',
+  'Dragons',
+  'Monsters',
 ];
 
 export const ADVERSARY_SIZES = [
@@ -288,7 +288,7 @@ export function emptyFellAbility() {
 export function emptyAdversary() {
   return {
     name: '',
-    category: 'Other',
+    category: 'NPCs',
     distinctiveFeatures: '',
     size: 'human',
     attributeLevel: 0,

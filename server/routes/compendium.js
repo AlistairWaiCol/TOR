@@ -79,7 +79,7 @@ function cleanBody(section, body = {}) {
     }
   }
   if (section === 'adversaries') {
-    if ('category' in out && !ADVERSARY_CATEGORIES.includes(out.category)) out.category = 'Other';
+    if ('category' in out && !ADVERSARY_CATEGORIES.includes(out.category)) out.category = 'NPCs';
     const sizeValues = ADVERSARY_SIZES.map((s) => s.value);
     if ('size' in out && !sizeValues.includes(out.size)) out.size = 'human';
   }

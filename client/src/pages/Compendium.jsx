@@ -713,10 +713,13 @@ async function announceFellAbility(sourceName, ability) {
 }
 
 function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry, isGM }) {
-  // Collapsed by default (see the category-group CSS), except whichever
-  // category a freshly-added entry lands in — that one opens automatically
-  // so "+ adversary" doesn't drop the new row somewhere out of sight.
-  const [expanded, setExpanded] = useState(() => new Set());
+  // Two independent levels of disclosure. Categories collapsed by default,
+  // except whichever one a freshly-added entry lands in. Within an open
+  // category, entries themselves are collapsed to a name-only row until
+  // clicked — collapsing the category resets its entries back to that clean
+  // name-list view too, rather than leaving them expanded underneath.
+  const [expandedCategories, setExpandedCategories] = useState(() => new Set());
+  const [expandedEntries, setExpandedEntries] = useState(() => new Set());
 
   const groups = useMemo(() => {
     const byCategory = new Map();
@@ -725,21 +728,46 @@ function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry
       if (!byCategory.has(key)) byCategory.set(key, []);
       byCategory.get(key).push(adv);
     }
-    // Fixed category order, only the ones actually holding entries.
-    return ADVERSARY_CATEGORIES.filter((c) => byCategory.has(c)).map((c) => [c, byCategory.get(c)]);
+    // Fixed category order, only the ones actually holding entries. Anything with a
+    // stray/legacy category value not in the canonical list still shows up, under a
+    // trailing "Other" bucket, rather than silently disappearing from the GM's view.
+    const known = ADVERSARY_CATEGORIES.filter((c) => byCategory.has(c)).map((c) => [c, byCategory.get(c)]);
+    return byCategory.has('Other') ? [...known, ['Other', byCategory.get('Other')]] : known;
   }, [entries]);
 
-  const setCategoryOpen = (category, open) =>
-    setExpanded((prev) => {
+  const setCategoryOpen = (category, open, list) =>
+    setExpandedCategories((prev) => {
       const next = new Set(prev);
-      if (open) next.add(category);
-      else next.delete(category);
+      if (open) {
+        next.add(category);
+      } else {
+        next.delete(category);
+        // Collapsing the category also collapses whatever was open inside it.
+        if (list?.length) {
+          setExpandedEntries((prevEntries) => {
+            const nextEntries = new Set(prevEntries);
+            for (const adv of list) nextEntries.delete(adv.id);
+            return nextEntries;
+          });
+        }
+      }
+      return next;
+    });
+
+  const toggleEntry = (id) =>
+    setExpandedEntries((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
   const addAdversary = async () => {
     const entry = await addEntry({ ...emptyAdversary(), name: 'New Adversary' });
-    if (entry) setCategoryOpen(ADVERSARY_CATEGORIES.includes(entry.category) ? entry.category : 'Other', true);
+    if (entry) {
+      setCategoryOpen(ADVERSARY_CATEGORIES.includes(entry.category) ? entry.category : 'Other', true);
+      setExpandedEntries((prev) => new Set(prev).add(entry.id));
+    }
   };
 
   return (
@@ -761,23 +789,33 @@ function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry
         <details
           key={category}
           className="category-group"
-          open={expanded.has(category)}
-          onToggle={(e) => setCategoryOpen(category, e.target.open)}
+          open={expandedCategories.has(category)}
+          onToggle={(e) => setCategoryOpen(category, e.target.open, list)}
         >
           <summary>
             {category} <span className="pill">{list.length}</span>
           </summary>
           <div className="category-body">
-            {list.map((adv) => (
-              <AdversaryCard
-                key={adv.id}
-                adv={adv}
-                editLocal={editLocal}
-                saveEntry={saveEntry}
-                removeEntry={removeEntry}
-                isGM={isGM}
-              />
-            ))}
+            {list.map((adv) =>
+              expandedEntries.has(adv.id) ? (
+                <div key={adv.id}>
+                  <button className="small entry-toggle" onClick={() => toggleEntry(adv.id)}>
+                    ▾ {adv.name || 'Unnamed'}
+                  </button>
+                  <AdversaryCard
+                    adv={adv}
+                    editLocal={editLocal}
+                    saveEntry={saveEntry}
+                    removeEntry={removeEntry}
+                    isGM={isGM}
+                  />
+                </div>
+              ) : (
+                <button key={adv.id} className="entry-row" onClick={() => toggleEntry(adv.id)}>
+                  ▸ {adv.name || 'Unnamed'}
+                </button>
+              ),
+            )}
           </div>
         </details>
       ))}
