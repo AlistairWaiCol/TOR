@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import combatWheelUrl from '../assets/combat-wheel.webp';
 import {
   skillEntry,
   stanceAttackDice,
@@ -13,13 +12,17 @@ import { effectiveWeapon } from '@shared/rewards.js';
 import {
   STANCE_LABELS,
   STANCE_ORDER,
+  adversarySpecialDamageOptions,
   engagementCounts,
   engagementLimits,
+  pcSpecialDamageOptions,
+  promptedCombatActionFor,
 } from '@shared/combat.js';
 import { hateResolveLabel, misdeedReminder } from '@shared/compendium.js';
 import { api } from '../lib/api.js';
 import { useApp } from '../state/AppContext.jsx';
 import { useRoll } from '../components/RollDialog.jsx';
+import Toast from '../components/Toast.jsx';
 import { NumField, SelectField } from '../components/Fields.jsx';
 
 const TACTICAL_ACTIONS = {
@@ -30,13 +33,13 @@ const TACTICAL_ACTIONS = {
 };
 
 /**
- * The Combat Tracker (Pass 1). Stance wheel background art + a status
- * sidebar, everything else driven off the live combat snapshot already
- * broadcast to every client — see server/lib/combatEngine.js for the rules
- * this page is a thin view over, and shared/combat.js for the pure maths.
+ * The Combat Tracker (Pass 1). Everything is driven off the live combat
+ * snapshot already broadcast to every client — see server/lib/combatEngine.js
+ * for the rules this page is a thin view over, and shared/combat.js for the
+ * pure maths (turn order, engagement limits, Special Damage options).
  */
 export default function CombatTracker() {
-  const { isGM, characters, combat, combatants, refresh } = useApp();
+  const { isGM, characters, combat, combatants, playingAs, refresh } = useApp();
   const { openRoll } = useRoll();
   const [adversaryBank, setAdversaryBank] = useState([]);
   const [pickAdversaryId, setPickAdversaryId] = useState('');
@@ -45,11 +48,12 @@ export default function CombatTracker() {
   const [status, setStatus] = useState('');
 
   useEffect(() => {
+    if (!isGM) return;
     api
       .get('/compendium/adversaries')
       .then((d) => setAdversaryBank(d.entries ?? []))
       .catch(() => setAdversaryBank([]));
-  }, []);
+  }, [isGM]);
 
   const flash = (msg) => {
     setStatus(msg);
@@ -68,15 +72,12 @@ export default function CombatTracker() {
 
   if (!combat) return <p className="muted">Loading the Combat Tracker…</p>;
 
+  /** Every combat-round control is owned by whoever has this hero Playing As — the GM can always override. Sheet editing elsewhere is unaffected. */
+  const canControl = (characterId) => isGM || playingAs === characterId;
+
   const activeCombatants = combatants.filter((c) => c.status === 'active');
   const engagedCounts = engagementCounts(combat.engagements);
   const stances = combat.stances ?? {};
-
-  const stanceCounts = STANCE_ORDER.reduce((acc, s) => {
-    acc[s] = characters.filter((c) => stances[c.id] === s).length;
-    return acc;
-  }, {});
-  const closeCombatCount = STANCE_ORDER.filter((s) => s !== 'Rear').reduce((n, s) => n + stanceCounts[s], 0);
 
   /* ---- GM actions ---- */
 
@@ -98,14 +99,16 @@ export default function CombatTracker() {
 
   const editCombatant = (id, patch) => call(() => api.patch(`/combat/combatants/${id}`, patch));
 
-  /* ---- stance & engagement (anyone at the table may set these) ---- */
+  const recordWoundSeverity = (characterId, healingDays, dying) =>
+    call(async () => {
+      await api.post('/combat/wound-severity', { characterId, healingDays, dying });
+      flash('Wound recorded.');
+    });
 
-  const cycleStance = (characterId) => {
-    const current = stances[characterId];
-    const idx = current ? STANCE_ORDER.indexOf(current) : -1;
-    const next = STANCE_ORDER[(idx + 1) % STANCE_ORDER.length];
-    call(() => api.post('/combat/stance', { characterId, stance: next }));
-  };
+  /* ---- stance & engagement ---- */
+
+  /** Directly sets the box's own stance — never a cycle. */
+  const assignStance = (characterId, stance) => call(() => api.post('/combat/stance', { characterId, stance }));
 
   const setEngagement = (characterId, combatantId) =>
     call(() => api.post('/combat/engage', { characterId, combatantId: combatantId || null }));
@@ -137,6 +140,7 @@ export default function CombatTracker() {
         `TN = STRENGTH TN (${strengthTN}) + ${combatant.name}'s Parry (${combatant.parry}). ${stanceAttackNote(sheet)}` +
         (pending?.note ? ` ${pending.note}.` : ''),
       usefulItems: usefulItemsForSkill(sheet, group),
+      specialSuccessOptions: pcSpecialDamageOptions(weapon, Boolean(sheet.shield?.equipped)),
       weary: sheet.conditions.weary,
       miserable: sheet.conditions.miserable,
       inspired: sheet.conditions.inspired,
@@ -148,6 +152,11 @@ export default function CombatTracker() {
     });
   };
 
+  /**
+   * GM-triggered. The result — hit/miss, Piercing Blow — reaches the target
+   * player through the broadcast `combat.pendingHits` state and
+   * CombatHitPrompt.jsx on THEIR screen; nothing here pops a dialog locally.
+   */
   const rollAdversaryAttack = (combatant, proficiencyIndex, target) => {
     const prof = combatant.combatProficiencies?.[proficiencyIndex];
     if (!prof || !target) return;
@@ -162,6 +171,7 @@ export default function CombatTracker() {
       rating: prof.rating,
       targetNumber: tn,
       note: `TN = ${target.name}'s total Parry (${tn}). Might ${combatant.might} — ${combatant.attacksUsedThisRound}/${Math.max(1, combatant.might)} attacks used this round.`,
+      specialSuccessOptions: adversarySpecialDamageOptions(prof),
       endpoint: '/combat/adversary-attack',
       extraBody: {
         combatantId: combatant.id,
@@ -169,28 +179,7 @@ export default function CombatTracker() {
         weaponDamage: prof.damage,
         weaponInjury: prof.injury,
       },
-      onRolled: (data) => {
-        refresh();
-        if (data?.hit) {
-          const takeIt = window.confirm(
-            `${target.name} is hit for ${data.hit.enduranceLoss} Endurance. OK to take it? ` +
-              `Cancel to spend their next main action on Knockback instead (halves it, rounded up).`,
-          );
-          api
-            .post('/combat/resolve-hit', {
-              characterId: target.id,
-              enduranceLoss: data.hit.enduranceLoss,
-              knockback: !takeIt,
-            })
-            .then(refresh);
-        }
-        if (data?.piercingBlow) {
-          window.alert(
-            `Piercing Blow! ${target.name}'s controller should roll PROTECTION (TN ${prof.injury}) on the ` +
-              `Character Sheet, then the GM records the outcome below under Wound Severity.`,
-          );
-        }
-      },
+      onRolled: () => refresh(),
     });
   };
 
@@ -277,8 +266,14 @@ export default function CombatTracker() {
     });
   };
 
-  const announceFellAbility = (ability) =>
-    call(() => api.post('/combat/fell-ability-announce', { name: ability.name, description: ability.description }));
+  const announceFellAbility = (combatant, ability) =>
+    call(() =>
+      api.post('/combat/fell-ability-announce', {
+        sourceName: combatant.name,
+        name: ability.name,
+        description: ability.description,
+      }),
+    );
 
   return (
     <>
@@ -299,7 +294,7 @@ export default function CombatTracker() {
       </div>
 
       {error ? <div className="error-box">{error}</div> : null}
-      {status ? <div className="info-box">{status}</div> : null}
+      <Toast message={status} />
 
       {isGM ? (
         <div className="panel">
@@ -344,45 +339,33 @@ export default function CombatTracker() {
       ) : null}
 
       {combat.active ? (
-        <div className="panel" style={{ position: 'relative', overflow: 'hidden' }}>
-          <div
-            style={{
-              backgroundImage: `url(${combatWheelUrl})`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              borderRadius: 8,
-              padding: 16,
-            }}
-          >
-            <div className="grid g4" style={{ gap: 12 }}>
-              {STANCE_ORDER.map((stance) => (
-                <StanceColumn
-                  key={stance}
-                  stance={stance}
-                  characters={characters}
-                  stances={stances}
-                  locked={combat.stanceLocked}
-                  onCycle={cycleStance}
-                />
-              ))}
-            </div>
-            <div
-              className="panel"
-              style={{ marginTop: 12, background: 'rgba(20,16,12,0.55)', backdropFilter: 'blur(2px)' }}
-            >
-              <h3 style={{ marginTop: 0 }}>Adversaries</h3>
-              {activeCombatants.length === 0 ? (
-                <p className="small muted">None added yet.</p>
-              ) : (
-                <div className="row" style={{ flexWrap: 'wrap' }}>
-                  {activeCombatants.map((c) => (
-                    <span key={c.id} className="pill" title={`Size: ${c.size}`}>
-                      {c.name} — engaged: {engagedCounts[c.id] || 0}/{engagementLimits(c.size).maxAttackersOnFoe}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+        <div className="panel">
+          <div className="grid g4" style={{ gap: 12 }}>
+            {STANCE_ORDER.map((stance) => (
+              <StanceColumn
+                key={stance}
+                stance={stance}
+                characters={characters}
+                stances={stances}
+                locked={combat.stanceLocked}
+                canControl={canControl}
+                onAssign={assignStance}
+              />
+            ))}
+          </div>
+          <div className="panel" style={{ marginTop: 12 }}>
+            <h3 style={{ marginTop: 0 }}>Adversaries</h3>
+            {activeCombatants.length === 0 ? (
+              <p className="small muted">None added yet.</p>
+            ) : (
+              <div className="row" style={{ flexWrap: 'wrap' }}>
+                {activeCombatants.map((c) => (
+                  <span key={c.id} className="pill" title={`Size: ${c.size}`}>
+                    {c.name} — engaged: {engagedCounts[c.id] || 0}/{engagementLimits(c.size).maxAttackersOnFoe}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       ) : null}
@@ -390,22 +373,29 @@ export default function CombatTracker() {
       {combat.active && combat.stanceLocked ? (
         <div className="panel">
           <h2>Engagement &amp; Actions</h2>
-          {characters.map((character) => (
-            <HeroActionRow
-              key={character.id}
-              character={character}
-              stance={stances[character.id]}
-              combatants={activeCombatants}
-              engagedId={combat.engagements?.[character.id] ?? ''}
-              acted={(combat.actedPlayers ?? []).includes(character.id)}
-              pendingModifier={combat.pendingModifiers?.[character.id]}
-              onEngage={(id) => setEngagement(character.id, id)}
-              onAttack={(weapon, combatant) => rollAttack(character, weapon, combatant)}
-              onTactical={(actionType, targetId) => rollTacticalAction(character, actionType, targetId)}
-              onBattle={(targetId, mod) => rollBattle(character, targetId, mod)}
-              onRetreat={(free) => rollRetreat(character, free)}
-            />
-          ))}
+          {characters.map((character) => {
+            const stance = stances[character.id];
+            const acted = (combat.actedPlayers ?? []).includes(character.id);
+            const isMyTurn = Boolean(promptedCombatActionFor({ combat, characterId: character.id }));
+            return (
+              <HeroActionRow
+                key={character.id}
+                character={character}
+                stance={stance}
+                combatants={activeCombatants}
+                engagedId={combat.engagements?.[character.id] ?? ''}
+                acted={acted}
+                canControl={canControl(character.id)}
+                isMyTurn={isMyTurn}
+                pendingModifier={combat.pendingModifiers?.[character.id]}
+                onEngage={(id) => setEngagement(character.id, id)}
+                onAttack={(weapon, combatant) => rollAttack(character, weapon, combatant)}
+                onTactical={(actionType, targetId) => rollTacticalAction(character, actionType, targetId)}
+                onBattle={(targetId, mod) => rollBattle(character, targetId, mod)}
+                onRetreat={(free) => rollRetreat(character, free)}
+              />
+            );
+          })}
 
           {isGM ? (
             <div style={{ marginTop: 12 }}>
@@ -423,16 +413,17 @@ export default function CombatTracker() {
                     )
                   }
                   onEdit={(patch) => editCombatant(c.id, patch)}
-                  onAnnounce={announceFellAbility}
+                  onAnnounce={(ability) => announceFellAbility(c, ability)}
                 />
               ))}
+              <WoundSeverityPanel characters={characters} combat={combat} onRecord={recordWoundSeverity} />
             </div>
           ) : null}
         </div>
       ) : null}
 
       {combat.active ? (
-        <CombatSidebar characters={characters} combatants={combatants} stances={stances} combat={combat} />
+        <CombatSidebar characters={characters} combatants={combatants} combat={combat} />
       ) : null}
     </>
   );
@@ -440,13 +431,10 @@ export default function CombatTracker() {
 
 /* ---------------- Stance column ---------------- */
 
-function StanceColumn({ stance, characters, stances, locked, onCycle }) {
+function StanceColumn({ stance, characters, stances, locked, canControl, onAssign }) {
   const inStance = characters.filter((c) => stances[c.id] === stance);
   return (
-    <div
-      className="panel"
-      style={{ background: 'rgba(20,16,12,0.55)', backdropFilter: 'blur(2px)', margin: 0 }}
-    >
+    <div className="panel" style={{ margin: 0 }}>
       <h3 style={{ marginTop: 0 }}>{STANCE_LABELS[stance]}</h3>
       {inStance.length === 0 ? <p className="small muted">nobody</p> : null}
       <div className="row" style={{ flexWrap: 'wrap' }}>
@@ -461,7 +449,13 @@ function StanceColumn({ stance, characters, stances, locked, onCycle }) {
           {characters
             .filter((c) => stances[c.id] !== stance)
             .map((c) => (
-              <button key={c.id} className="small" onClick={() => onCycle(c.id)}>
+              <button
+                key={c.id}
+                className="small"
+                disabled={!canControl(c.id)}
+                title={canControl(c.id) ? undefined : `Only ${c.name} (Playing As) or the GM can set this.`}
+                onClick={() => onAssign(c.id, stance)}
+              >
                 + {c.name.split(' ')[0]}
               </button>
             ))}
@@ -479,6 +473,8 @@ function HeroActionRow({
   combatants,
   engagedId,
   acted,
+  canControl,
+  isMyTurn,
   pendingModifier,
   onEngage,
   onAttack,
@@ -495,12 +491,34 @@ function HeroActionRow({
   const tactical = TACTICAL_ACTIONS[stance];
   const isCloseCombat = stance && stance !== 'Rear';
 
+  if (!stance) {
+    return (
+      <div style={{ padding: '10px 0', borderBottom: '1px solid #2c261e', opacity: 0.6 }}>
+        <div className="row">
+          <strong style={{ minWidth: 140 }}>{character.name}</strong>
+          <span className="pill bad">no stance — sits out this round</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Engaging/Weapon prep is available once locked, gated only by ownership;
+  // the actual action buttons additionally need it to be this stance's turn.
+  const prepDisabled = !canControl;
+  const actionDisabled = !canControl || !isMyTurn || acted;
+
   return (
     <div style={{ padding: '10px 0', borderBottom: '1px solid #2c261e' }}>
       <div className="row" style={{ flexWrap: 'wrap' }}>
         <strong style={{ minWidth: 140 }}>{character.name}</strong>
-        <span className="pill">{stance ? STANCE_LABELS[stance] : 'no stance'}</span>
-        {acted ? <span className="pill ok">acted</span> : <span className="pill">waiting</span>}
+        <span className="pill">{STANCE_LABELS[stance]}</span>
+        {acted ? (
+          <span className="pill ok">acted</span>
+        ) : isMyTurn ? (
+          <span className="pill gold">their turn</span>
+        ) : (
+          <span className="pill">waiting for turn</span>
+        )}
         {pendingModifier?.note ? <span className="pill gold">{pendingModifier.note}</span> : null}
       </div>
 
@@ -511,6 +529,7 @@ function HeroActionRow({
               label="Engaging"
               value={engagedId}
               onChange={onEngage}
+              disabled={prepDisabled}
               options={[{ value: '', label: '— none —' }, ...combatants.map((c) => ({ value: c.id, label: c.name }))]}
             />
           </div>
@@ -525,6 +544,7 @@ function HeroActionRow({
                 label="Weapon"
                 value={String(weaponIdx)}
                 onChange={(v) => setWeaponIdx(Number(v))}
+                disabled={prepDisabled}
                 options={equippedWeapons.map((w, i) => ({ value: String(i), label: w.name || w.proficiency }))}
               />
             </div>
@@ -537,12 +557,14 @@ function HeroActionRow({
                   label="Attack target"
                   value={engagedId}
                   onChange={onEngage}
+                  disabled={prepDisabled}
                   options={[{ value: '', label: '— pick a target —' }, ...combatants.map((c) => ({ value: c.id, label: c.name }))]}
                 />
               </div>
             ) : null}
             <button
-              disabled={acted || !engagedId}
+              disabled={actionDisabled || !engagedId}
+              title={!canControl ? `Only ${character.name} (Playing As) or the GM can act for them.` : !isMyTurn ? "Not this hero's turn yet." : undefined}
               onClick={() => {
                 const w = equippedWeapons[weaponIdx];
                 const target = combatants.find((c) => c.id === engagedId);
@@ -557,24 +579,28 @@ function HeroActionRow({
         )}
 
         {tactical ? (
-          <button disabled={acted} onClick={() => onTactical(tactical.key, tactical.key === 'protect-companion' ? engagedId : undefined)}>
+          <button
+            disabled={actionDisabled}
+            title={!canControl ? `Only ${character.name} (Playing As) or the GM can act for them.` : !isMyTurn ? "Not this hero's turn yet." : undefined}
+            onClick={() => onTactical(tactical.key, tactical.key === 'protect-companion' ? engagedId : undefined)}
+          >
             {tactical.label}
           </button>
         ) : null}
 
-        <button disabled={acted} onClick={() => onBattle(battleTarget || undefined, battleMod)}>
+        <button disabled={actionDisabled} onClick={() => onBattle(battleTarget || undefined, battleMod)}>
           Battle
         </button>
         <div style={{ width: 90 }}>
-          <NumField label="Battle ±d" value={battleMod} onChange={setBattleMod} min={-2} max={2} />
+          <NumField label="Battle ±d" value={battleMod} onChange={setBattleMod} min={-2} max={2} disabled={prepDisabled} />
         </div>
 
         {stance === 'Rear' ? (
-          <button disabled={acted} onClick={() => onRetreat(true)}>
+          <button disabled={actionDisabled} onClick={() => onRetreat(true)}>
             Retreat (free)
           </button>
         ) : stance === 'Defensive' ? (
-          <button disabled={acted} onClick={() => onRetreat(false)}>
+          <button disabled={actionDisabled} onClick={() => onRetreat(false)}>
             Retreat (roll)
           </button>
         ) : null}
@@ -589,6 +615,7 @@ function AdversaryAttackRow({ combatant, characters, onFire, onEdit, onAnnounce 
   const [profIdx, setProfIdx] = useState(0);
   const [targetId, setTargetId] = useState(characters[0]?.id ?? '');
   const budget = Math.max(1, combatant.might);
+  const doneForRound = combatant.attacksUsedThisRound >= budget;
 
   return (
     <div style={{ padding: '8px 0', borderBottom: '1px solid #2c261e' }}>
@@ -597,9 +624,11 @@ function AdversaryAttackRow({ combatant, characters, onFire, onEdit, onAnnounce 
         <span className="pill">
           Endurance {combatant.currentEndurance}/{combatant.maxEndurance}
         </span>
-        <span className="pill">
-          Attacks {combatant.attacksUsedThisRound}/{budget}
-        </span>
+        {doneForRound ? (
+          <span className="pill ok">Acted {combatant.attacksUsedThisRound}/{budget}</span>
+        ) : (
+          <span className="pill">Attacks {combatant.attacksUsedThisRound}/{budget}</span>
+        )}
         {combatant.weary ? <span className="pill bad">weary</span> : null}
         <button className="small danger" onClick={() => onEdit({ status: 'removed' })}>
           remove
@@ -622,7 +651,7 @@ function AdversaryAttackRow({ combatant, characters, onFire, onEdit, onAnnounce 
             options={characters.map((c) => ({ value: c.id, label: c.name }))}
           />
         </div>
-        <button disabled={combatant.attacksUsedThisRound >= budget} onClick={() => onFire(profIdx, targetId)}>
+        <button disabled={doneForRound} onClick={() => onFire(profIdx, targetId)}>
           Attack
         </button>
       </div>
@@ -639,9 +668,47 @@ function AdversaryAttackRow({ combatant, characters, onFire, onEdit, onAnnounce 
   );
 }
 
+/* ---------------- Wound Severity (GM) ---------------- */
+
+/** Surfaces once a hit player's Protection roll fails — the GM's own book gives the healing days. */
+function WoundSeverityPanel({ characters, combat, onRecord }) {
+  const waiting = characters.filter((c) => combat.pendingHits?.[c.id]?.stage === 'wound-severity');
+  if (!waiting.length) return null;
+  return (
+    <div className="warn-box" style={{ marginTop: 10 }}>
+      <strong>Wound Severity owed:</strong>
+      {waiting.map((c) => (
+        <WoundSeverityRow key={c.id} character={c} pending={combat.pendingHits[c.id]} onRecord={onRecord} />
+      ))}
+    </div>
+  );
+}
+
+function WoundSeverityRow({ character, pending, onRecord }) {
+  const [healingDays, setHealingDays] = useState(3);
+  const [dying, setDying] = useState(false);
+  return (
+    <div className="row" style={{ marginTop: 6, flexWrap: 'wrap' }}>
+      <span>
+        {character.name} — Feat Die {pending.featFace === 11 ? 'ᚷ' : pending.featFace === 0 ? '👁' : pending.featFace}
+      </span>
+      <div style={{ width: 90 }}>
+        <NumField label="Healing days" value={healingDays} onChange={setHealingDays} min={0} disabled={dying} />
+      </div>
+      <label className="check">
+        <input type="checkbox" checked={dying} onChange={(e) => setDying(e.target.checked)} />
+        Worst result — Dying
+      </label>
+      <button className="primary" onClick={() => onRecord(character.id, healingDays, dying)}>
+        Record
+      </button>
+    </div>
+  );
+}
+
 /* ---------------- Status sidebar ---------------- */
 
-function CombatSidebar({ characters, combatants, stances, combat }) {
+function CombatSidebar({ characters, combatants, combat }) {
   return (
     <div className="panel">
       <h2>Status</h2>
@@ -681,31 +748,41 @@ function CombatSidebar({ characters, combatants, stances, combat }) {
                     )}
                   </td>
                   <td>{sheet.attributes.heart.hope}</td>
-                  <td>{acted ? '✓' : ''}</td>
+                  <td>{acted ? <span className="pill ok">acted</span> : ''}</td>
                 </tr>
               );
             })}
             {combatants
               .filter((c) => c.status !== 'removed')
-              .map((c) => (
-                <tr key={c.id} style={{ opacity: c.status === 'down' ? 0.5 : 1 }}>
-                  <td>
-                    {c.name} {c.status === 'down' ? '(down)' : ''}
-                  </td>
-                  <td>
-                    {c.currentEndurance}/{c.maxEndurance}
-                  </td>
-                  <td>{c.parry}</td>
-                  <td>{c.armour}</td>
-                  <td>{c.weary ? <span className="pill bad">Weary</span> : '—'}</td>
-                  <td>
-                    {hateResolveLabel(c.category)} {c.hateResolve} (spent {c.hateResolveSpent}/{c.might})
-                  </td>
-                  <td>
-                    {c.attacksUsedThisRound}/{Math.max(1, c.might)}
-                  </td>
-                </tr>
-              ))}
+              .map((c) => {
+                const budget = Math.max(1, c.might);
+                const doneForRound = c.attacksUsedThisRound >= budget;
+                return (
+                  <tr key={c.id} style={{ opacity: c.status === 'down' ? 0.5 : 1 }}>
+                    <td>
+                      {c.name} {c.status === 'down' ? '(down)' : ''}
+                    </td>
+                    <td>
+                      {c.currentEndurance}/{c.maxEndurance}
+                    </td>
+                    <td>{c.parry}</td>
+                    <td>{c.armour}</td>
+                    <td>{c.weary ? <span className="pill bad">Weary</span> : '—'}</td>
+                    <td>
+                      {hateResolveLabel(c.category)} {c.hateResolve} (spent {c.hateResolveSpent}/{c.might})
+                    </td>
+                    <td>
+                      {doneForRound ? (
+                        <span className="pill ok">
+                          Acted {c.attacksUsedThisRound}/{budget}
+                        </span>
+                      ) : (
+                        `${c.attacksUsedThisRound}/${budget}`
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
       </div>

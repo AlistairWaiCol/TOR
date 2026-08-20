@@ -66,8 +66,16 @@ router.patch(
     if (!existing) return res.status(404).json({ error: 'Roll not found.' });
     const patch = {};
     if (req.body.specialSuccesses != null) {
-      const picks = (Array.isArray(req.body.specialSuccesses) ? req.body.specialSuccesses : [])
-        .filter((p) => SPECIAL_SUCCESS_OPTIONS.includes(p));
+      const raw = Array.isArray(req.body.specialSuccesses) ? req.body.specialSuccesses : [];
+      // Combat's Special Damage options (Heavy Blow, Pierce, Break Shield, ...)
+      // are a genuinely different system from the Journey/Event Special
+      // Success tags below, computed client-side from the weapon/adversary in
+      // play rather than a fixed list — trusted the same way rating/bonus
+      // already are for a combat roll. Everything else keeps the fixed list.
+      const picks =
+        existing.kind === 'attack'
+          ? raw.map((p) => String(p).trim()).filter(Boolean)
+          : raw.filter((p) => SPECIAL_SUCCESS_OPTIONS.includes(p));
       if (picks.length > existing.icons) {
         return res
           .status(400)

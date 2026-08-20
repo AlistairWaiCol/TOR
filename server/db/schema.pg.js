@@ -304,6 +304,7 @@ export const combatState = pgTable('combat_state', {
   engagements: text('engagements').notNull().default('{}'),
   actedPlayers: text('acted_players').notNull().default('[]'),
   pendingModifiers: text('pending_modifiers').notNull().default('{}'),
+  pendingHits: text('pending_hits').notNull().default('{}'),
   updatedAt: text('updated_at').notNull().default(now),
 });
 

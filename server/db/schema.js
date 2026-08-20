@@ -331,6 +331,13 @@ export const combatState = sqliteTable('combat_state', {
   engagements: text('engagements').notNull().default('{}'), // JSON { characterId: combatantId }
   actedPlayers: text('acted_players').notNull().default('[]'), // JSON string[] of characterIds
   pendingModifiers: text('pending_modifiers').notNull().default('{}'), // JSON { characterId: {extraDice, note} }
+  // A hit awaiting the HIT PLAYER's own decision (take it / Knockback), then
+  // — if it was a Piercing Blow — their Protection roll, then the GM's Wound
+  // Severity entry. JSON { characterId: { stage, enduranceLoss, source,
+  // piercingBlow, weaponInjury, featFace } }. See CombatHitPrompt.jsx, which
+  // is the only thing that ever shows this to a player, gated on their own
+  // "Playing As" selection — never surfaced to the GM as a native popup.
+  pendingHits: text('pending_hits').notNull().default('{}'),
   updatedAt: text('updated_at').notNull().default(now),
 });
 

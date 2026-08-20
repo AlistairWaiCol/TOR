@@ -44,6 +44,20 @@ function knownSection(req, res, next) {
 }
 
 /**
+ * Full adversary stat blocks (Fell Abilities, what the party's about to
+ * fight) are GM-only information — a different footing from the rest of the
+ * Compendium, which any player passcode can read and edit. Enforced here, not
+ * just hidden in the nav, the same "defense in depth" the rest of the app
+ * already applies to Handouts' hidden-filtering and Clear Route's lock check.
+ */
+function adversariesAreGMOnly(req, res, next) {
+  if (req.params.section === 'adversaries' && !req.isGM) {
+    return res.status(403).json({ error: 'The Adversary/NPC Bank is GM only.' });
+  }
+  return next();
+}
+
+/**
  * Per-section input tidying. Everything else is handled generically by the
  * store's field list, which silently drops anything it does not know about.
  */
@@ -78,14 +92,16 @@ function cleanBody(section, body = {}) {
 router.get(
   '/',
   requireAuth,
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const snapshot = await compendiumSnapshot();
+    if (!req.isGM) delete snapshot.adversaries;
     res.json({
-      sections: COMPENDIUM_SECTIONS,
+      sections: req.isGM ? COMPENDIUM_SECTIONS : COMPENDIUM_SECTIONS.filter((s) => s.key !== 'adversaries'),
       itemKinds: ITEM_KINDS,
       proficiencyGroups: PROFICIENCY_GROUPS,
       standardsOfLiving: STANDARDS_OF_LIVING,
       cultures: CULTURAL_VIRTUE_CULTURES,
-      ...(await compendiumSnapshot()),
+      ...snapshot,
     });
   }),
 );
@@ -94,6 +110,7 @@ router.get(
   '/:section',
   requireAuth,
   knownSection,
+  adversariesAreGMOnly,
   asyncHandler(async (req, res) => {
     res.json({ section: req.params.section, entries: await listCompendium(req.params.section) });
   }),
@@ -103,6 +120,7 @@ router.post(
   '/:section',
   requireAuth,
   knownSection,
+  adversariesAreGMOnly,
   asyncHandler(async (req, res) => {
     const entry = await createCompendiumEntry(
       req.params.section,
@@ -117,6 +135,7 @@ router.patch(
   '/:section/:id',
   requireAuth,
   knownSection,
+  adversariesAreGMOnly,
   asyncHandler(async (req, res) => {
     const entry = await updateCompendiumEntry(
       req.params.section,
@@ -133,6 +152,7 @@ router.delete(
   '/:section/:id',
   requireAuth,
   knownSection,
+  adversariesAreGMOnly,
   asyncHandler(async (req, res) => {
     const existing = await getCompendiumEntry(req.params.section, req.params.id);
     if (!existing) return res.status(404).json({ error: 'Entry not found.' });

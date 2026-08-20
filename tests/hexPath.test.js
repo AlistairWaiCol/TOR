@@ -23,6 +23,7 @@ import {
   hexNeighbours,
   hexPolygon,
   offsetToCube,
+  removeHexFromRoute,
   resamplePolyline,
   snapPathToHexes,
 } from '../shared/hexMath.js';
@@ -219,5 +220,72 @@ describe('snapPathToHexes', () => {
       assert.deepEqual(Object.keys(h).sort(), ['col', 'row']);
       assert.ok(Number.isInteger(h.col) && Number.isInteger(h.row));
     }
+  });
+});
+
+describe('removeHexFromRoute — GM correction for over-eager snapping', () => {
+  it('drops a hex from the middle and re-bridges the gap if it breaks contiguity', () => {
+    // Straight run 0,0 -> 4,0 with an extra off-line hex spliced in as "9" at
+    // index 2, the same shape an over-eager snap would produce.
+    const route = [
+      { col: 0, row: 0 },
+      { col: 1, row: 0 },
+      { col: 3, row: 2 }, // stray, not adjacent to its neighbours below
+      { col: 2, row: 0 },
+      { col: 3, row: 0 },
+    ];
+    const next = removeHexFromRoute(route, { col: 3, row: 2 });
+    assert.equal(next.some((h) => h.col === 3 && h.row === 2), false);
+    for (let i = 1; i < next.length; i += 1) {
+      assert.equal(hexDistance(next[i - 1], next[i]), 1, `gap at index ${i}: ${JSON.stringify(next)}`);
+    }
+    assert.deepEqual(next[0], { col: 0, row: 0 });
+    assert.deepEqual(next[next.length - 1], { col: 3, row: 0 });
+  });
+
+  it('removes cleanly with no bridging needed when neighbours are already adjacent', () => {
+    // Two of hex 0,0's own neighbours, chosen so they are also adjacent to
+    // EACH OTHER (any two consecutive directions around a hex are), rather
+    // than hand-picked coordinates — the offset-column layout makes "looks
+    // adjacent" an unreliable guide (see the failure this replaced).
+    const a = { col: 0, row: 0 };
+    const around = hexNeighbours(a.col, a.row);
+    const [b, c] = [around[0], around[1]];
+    assert.equal(hexDistance(b, c), 1, 'test fixture assumption: consecutive neighbours are adjacent');
+    assert.deepEqual(removeHexFromRoute([a, b, c], b), [a, c]);
+  });
+
+  it('removing the first or last hex just drops it, no bridging', () => {
+    const route = [
+      { col: 0, row: 0 },
+      { col: 1, row: 0 },
+      { col: 2, row: 0 },
+    ];
+    assert.deepEqual(removeHexFromRoute(route, { col: 0, row: 0 }), [
+      { col: 1, row: 0 },
+      { col: 2, row: 0 },
+    ]);
+    assert.deepEqual(removeHexFromRoute(route, { col: 2, row: 0 }), [
+      { col: 0, row: 0 },
+      { col: 1, row: 0 },
+    ]);
+  });
+
+  it('is a no-op when the hex is not in the route', () => {
+    const route = [{ col: 0, row: 0 }, { col: 1, row: 0 }];
+    assert.deepEqual(removeHexFromRoute(route, { col: 9, row: 9 }), route);
+  });
+
+  it('only removes the first matching occurrence of a revisited hex', () => {
+    const route = [
+      { col: 0, row: 0 },
+      { col: 1, row: 0 },
+      { col: 0, row: 0 },
+    ];
+    const next = removeHexFromRoute(route, { col: 0, row: 0 });
+    assert.deepEqual(next, [
+      { col: 1, row: 0 },
+      { col: 0, row: 0 },
+    ]);
   });
 });

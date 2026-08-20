@@ -322,6 +322,7 @@ const SQLITE_STATEMENTS = [
      engagements TEXT NOT NULL DEFAULT '{}',
      acted_players TEXT NOT NULL DEFAULT '[]',
      pending_modifiers TEXT NOT NULL DEFAULT '{}',
+     pending_hits TEXT NOT NULL DEFAULT '{}',
      updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
    )`,
 ];
@@ -340,6 +341,7 @@ const ADDED_COLUMNS = [
   ['campaign_state', 'day_hold_seconds', 'INTEGER NOT NULL DEFAULT 5'],
   ['party_state', 'drawn_path', "TEXT NOT NULL DEFAULT '[]'"],
   ['journeys', 'drawn_path', "TEXT NOT NULL DEFAULT '[]'"],
+  ['combat_state', 'pending_hits', "TEXT NOT NULL DEFAULT '{}'"],
 ];
 
 function addMissingColumns(sqlite) {
@@ -679,8 +681,10 @@ const PG_STATEMENTS = [
      engagements TEXT NOT NULL DEFAULT '{}',
      acted_players TEXT NOT NULL DEFAULT '[]',
      pending_modifiers TEXT NOT NULL DEFAULT '{}',
+     pending_hits TEXT NOT NULL DEFAULT '{}',
      updated_at TEXT NOT NULL DEFAULT (${PG_NOW})
    )`,
+  `ALTER TABLE combat_state ADD COLUMN IF NOT EXISTS pending_hits TEXT NOT NULL DEFAULT '{}'`,
 ];
 
 /** Insert the singleton campaign/party/travel rows if they don't exist yet — portable via Drizzle. */

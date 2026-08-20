@@ -87,8 +87,17 @@ function RollModal({ config, onClose }) {
   const [error, setError] = useState('');
   const [picks, setPicks] = useState([]);
 
+  // 'kill' only fires here for a PC-attacks-adversary roll (hit.removed) — a
+  // Player-hero reduced to zero is discovered later, in resolveHit(), and
+  // gets its own escalated treatment in CombatHitPrompt.jsx instead.
+  const outcomeTier = outcome?.hit?.removed ? 'kill' : outcome?.piercingBlow ? 'piercing' : 'plain';
+
   const hope = config.hope ?? 0;
   const inspired = Boolean(config.inspired);
+  // Combat's Special Damage options are computed by the caller (they depend
+  // on the weapon/proficiency in play) and passed in here; every other roll
+  // keeps the Journey/Event Special Success tags, a genuinely different system.
+  const specialSuccessOptions = config.specialSuccessOptions ?? SPECIAL_SUCCESS_OPTIONS;
 
   const set = (key) => (v) => setForm((f) => ({ ...f, [key]: v }));
 
@@ -252,7 +261,20 @@ function RollModal({ config, onClose }) {
           </>
         ) : (
           <>
-            <DiceResult result={outcome.result} />
+            {/* Escalating treatment for a combat roll's outcome: a plain
+                success stays the ordinary result styling, a Piercing Blow (a
+                real injury on the line) steps up, and a kill — an adversary
+                removed or hit.removed, checked here; a Player-hero reduced to
+                zero comes through CombatHitPrompt.jsx's own resolution step,
+                not this dialog — gets the strongest treatment of the three. */}
+            <div className={`roll-outcome ${outcomeTier === 'kill' ? 'tier-kill' : outcomeTier === 'piercing' ? 'tier-piercing' : ''}`}>
+              {outcomeTier === 'kill' ? (
+                <div className="outcome-banner">☠ {outcome.hit?.combatantName ?? 'Target'} is down</div>
+              ) : outcomeTier === 'piercing' ? (
+                <div className="outcome-banner">⚡ Piercing Blow</div>
+              ) : null}
+              <DiceResult result={outcome.result} />
+            </div>
             {outcome.hopeError ? <div className="warn-box">{outcome.hopeError}</div> : null}
             <div className="small muted mono" style={{ margin: '8px 0' }}>
               {outcome.message}
@@ -280,7 +302,7 @@ function RollModal({ config, onClose }) {
                       next[i] = v;
                       savePicks(next);
                     }}
-                    options={[{ value: '', label: '— unspent —' }, ...SPECIAL_SUCCESS_OPTIONS]}
+                    options={[{ value: '', label: '— unspent —' }, ...specialSuccessOptions]}
                   />
                 ))}
               </div>

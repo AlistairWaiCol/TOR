@@ -14,6 +14,7 @@ import AdventureNotes from './pages/AdventureNotes.jsx';
 import CombatTracker from './pages/CombatTracker.jsx';
 import TurnPrompt from './components/TurnPrompt.jsx';
 import CombatTurnPrompt from './components/CombatTurnPrompt.jsx';
+import CombatHitPrompt from './components/CombatHitPrompt.jsx';
 
 /**
  * Nav is data-driven so a v2 section can be switched on by swapping
@@ -175,6 +176,7 @@ export default function App() {
           to a player who is looking at something else. */}
       <TurnPrompt />
       <CombatTurnPrompt />
+      <CombatHitPrompt />
     </div>
   );
 }

@@ -94,6 +94,40 @@ export function isPiercingBlow(featFace, piercingThreshold = 10) {
 }
 
 /**
+ * Special Damage options for a Player-hero's attack, filtered by what's
+ * actually in play — this is a genuinely different system from the
+ * Journey/Event "Special Success" tags in shared/dice.js's
+ * SPECIAL_SUCCESS_OPTIONS, not a variant of it.
+ *
+ * Heavy Blow: any weapon. Fend Off: any CLOSE COMBAT weapon (i.e. not Bows).
+ * Pierce: Bows/Spears/Swords, plus the Dagger by name (core rulebook: "can
+ * trigger Pierce as if it was a Sword" — Daggers are otherwise a Brawling
+ * weapon). Shield Thrust: only with a shield equipped.
+ */
+export function pcSpecialDamageOptions(weapon = {}, hasShield = false) {
+  const options = ['Heavy Blow'];
+  const proficiency = weapon.proficiency || '';
+  if (proficiency !== 'Bows') options.push('Fend Off');
+  const pierceEligible = ['Bows', 'Spears', 'Swords'].includes(proficiency) || weapon.name === 'Dagger';
+  if (pierceEligible) options.push('Pierce');
+  if (hasShield) options.push('Shield Thrust');
+  return options;
+}
+
+/**
+ * Special Damage options for an adversary's attack: Heavy Blow is always
+ * available, plus whatever that specific Combat Proficiency's `special`
+ * free-tag field lists (e.g. "Break Shield, Seize").
+ */
+export function adversarySpecialDamageOptions(proficiency) {
+  const extra = String(proficiency?.special ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ['Heavy Blow', ...extra];
+}
+
+/**
  * Is it this hero's turn to act in Action Resolution right now? Mirrors
  * shared/journey.js's `promptedRollFor()` — pure, reads only state already
  * broadcast to every client, and drives the app-shell "it's your turn" nudge.

@@ -290,6 +290,32 @@ export function resamplePolyline(points = [], spacing = 1) {
  * @param {object} [opts]
  * @param {number} [opts.spacing] sample spacing in px; defaults to a third of a hex
  */
+/**
+ * A hex snapped into a freehand route by only barely clipping its corner is
+ * expected behaviour of point-to-nearest-centre snapping, not a bug to chase
+ * out of the algorithm — this is the correction tool instead: the GM removes
+ * the unwanted hex by hand, and the remaining path is re-bridged with the
+ * same hexLine() gap-fill snapPathToHexes() uses, so it stays walkable one
+ * hex at a time.
+ *
+ * Only the FIRST matching occurrence is removed — a route deliberately
+ * doubling back over the same hex is rare enough that index-based removal
+ * isn't worth the extra API surface here.
+ */
+export function removeHexFromRoute(route = [], target) {
+  const idx = route.findIndex((h) => h.col === target.col && h.row === target.row);
+  if (idx === -1) return route;
+  const before = route.slice(0, idx);
+  const after = route.slice(idx + 1);
+  if (before.length === 0 || after.length === 0) return [...before, ...after];
+  const prev = before[before.length - 1];
+  const next = after[0];
+  if (hexDistance(prev, next) <= 1) return [...before, ...after];
+  // hexLine() includes both ends; both are already present in before/after.
+  const bridge = hexLine(prev, next).slice(1, -1);
+  return [...before, ...bridge, ...after];
+}
+
 export function snapPathToHexes(points = [], calibration, { spacing } = {}) {
   const c = normalise(calibration);
   const step = Number(spacing) > 0 ? Number(spacing) : c.hexHeight / 3;

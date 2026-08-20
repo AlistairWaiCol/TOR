@@ -1016,6 +1016,7 @@ function toCombatState(row) {
     engagements: parseJson(row.engagements, {}),
     actedPlayers: parseJson(row.actedPlayers, []),
     pendingModifiers: parseJson(row.pendingModifiers, {}),
+    pendingHits: parseJson(row.pendingHits, {}),
   };
 }
 
@@ -1037,6 +1038,7 @@ export async function setCombatState(patch) {
   if ('engagements' in patch) values.engagements = JSON.stringify(patch.engagements ?? {});
   if ('actedPlayers' in patch) values.actedPlayers = JSON.stringify(patch.actedPlayers ?? []);
   if ('pendingModifiers' in patch) values.pendingModifiers = JSON.stringify(patch.pendingModifiers ?? {});
+  if ('pendingHits' in patch) values.pendingHits = JSON.stringify(patch.pendingHits ?? {});
   values.updatedAt = new Date().toISOString();
   await db.update(combatState).set(values).where(eq(combatState.id, SINGLETON));
   return getCombatState();

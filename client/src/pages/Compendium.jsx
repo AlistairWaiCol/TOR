@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ADVERSARY_CATEGORIES,
   ADVERSARY_SIZES,
-  COMPENDIUM_SECTIONS,
   ITEM_KINDS,
   STANDARDS_OF_LIVING,
   emptyAdversary,
@@ -19,6 +18,7 @@ import { PROFICIENCY_GROUPS } from '@shared/character.js';
 import { api } from '../lib/api.js';
 import { useApp } from '../state/AppContext.jsx';
 import { AreaField, NumField, SelectField, TextField } from '../components/Fields.jsx';
+import Toast from '../components/Toast.jsx';
 
 /**
  * The campaign's shared reference shelf. Sections come from
@@ -103,19 +103,22 @@ export default function Compendium() {
   if (error && !data) return <div className="error-box">{error}</div>;
   if (!data) return <p className="muted">Loading the Compendium…</p>;
 
-  const current = COMPENDIUM_SECTIONS.find((s) => s.key === section);
+  // Server-filtered, not the static shared list: a player's response never
+  // includes 'adversaries' at all — full stat blocks are GM-only.
+  const sections = data.sections ?? [];
+  const current = sections.find((s) => s.key === section) ?? sections[0];
 
   return (
     <>
       <div className="page-head">
         <h1>Compendium</h1>
         <span className="pill">
-          {(data[section] ?? []).length} {current.label.toLowerCase()}
+          {(data[section] ?? []).length} {(current?.label ?? '').toLowerCase()}
         </span>
       </div>
 
       <div className="row" style={{ marginBottom: 12 }}>
-        {COMPENDIUM_SECTIONS.map((s) => (
+        {sections.map((s) => (
           <button
             key={s.key}
             className={section === s.key ? 'primary' : ''}
@@ -134,7 +137,7 @@ export default function Compendium() {
       </div>
 
       {error ? <div className="error-box">{error}</div> : null}
-      {status ? <div className="info-box">{status}</div> : null}
+      <Toast message={status} />
 
       {section === 'virtues' ? (
         <VirtuesPanel
@@ -696,24 +699,28 @@ function LocationsPanel({ entries, editLocal, saveEntry, addEntry, removeEntry }
  * Announce a Fell Ability to Discord — same plumbing the journey engine
  * already uses, fired from here rather than mid-fight on the Combat Tracker
  * so the GM can narrate an ability the moment it matters, not just when a
- * combatant instance happens to have it.
+ * combatant instance happens to have it. Formatted "[Source] - [Ability] -
+ * [Text]" so the channel knows which adversary it came from.
  */
-async function announceFellAbility(ability) {
+async function announceFellAbility(sourceName, ability) {
   await api.post('/combat/fell-ability-announce', {
+    sourceName,
     name: ability.name || 'Fell Ability',
     description: ability.description || '',
   });
 }
 
 function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry, isGM }) {
-  const setProficiencies = (entry, next) => {
-    editLocal(entry.id, { combatProficiencies: next });
-    saveEntry(entry, { combatProficiencies: next });
-  };
-  const setFellAbilities = (entry, next) => {
-    editLocal(entry.id, { fellAbilities: next });
-    saveEntry(entry, { fellAbilities: next });
-  };
+  const groups = useMemo(() => {
+    const byCategory = new Map();
+    for (const adv of entries) {
+      const key = ADVERSARY_CATEGORIES.includes(adv.category) ? adv.category : 'Other';
+      if (!byCategory.has(key)) byCategory.set(key, []);
+      byCategory.get(key).push(adv);
+    }
+    // Fixed category order, only the ones actually holding entries.
+    return ADVERSARY_CATEGORIES.filter((c) => byCategory.has(c)).map((c) => [c, byCategory.get(c)]);
+  }, [entries]);
 
   return (
     <div className="panel">
@@ -729,13 +736,46 @@ function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry
         the combat fields blank or zero.
       </p>
 
-      {entries.map((adv) => {
-        const label = hateResolveLabel(adv.category);
-        const reminder = misdeedReminder(adv.category);
-        const proficiencies = adv.combatProficiencies ?? [];
-        const fellAbilities = adv.fellAbilities ?? [];
-        return (
-          <div key={adv.id} style={{ padding: '12px 0', borderBottom: '1px solid #2c261e' }}>
+      {groups.length === 0 ? <p className="small muted">No adversaries catalogued yet.</p> : null}
+      {groups.map(([category, list]) => (
+        <details key={category} className="category-group">
+          <summary>
+            {category} <span className="pill">{list.length}</span>
+          </summary>
+          <div className="category-body">
+            {list.map((adv) => (
+              <AdversaryCard
+                key={adv.id}
+                adv={adv}
+                editLocal={editLocal}
+                saveEntry={saveEntry}
+                removeEntry={removeEntry}
+                isGM={isGM}
+              />
+            ))}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function AdversaryCard({ adv, editLocal, saveEntry, removeEntry, isGM }) {
+  const setProficiencies = (entry, next) => {
+    editLocal(entry.id, { combatProficiencies: next });
+    saveEntry(entry, { combatProficiencies: next });
+  };
+  const setFellAbilities = (entry, next) => {
+    editLocal(entry.id, { fellAbilities: next });
+    saveEntry(entry, { fellAbilities: next });
+  };
+
+  const label = hateResolveLabel(adv.category);
+  const reminder = misdeedReminder(adv.category);
+  const proficiencies = adv.combatProficiencies ?? [];
+  const fellAbilities = adv.fellAbilities ?? [];
+  return (
+    <div style={{ padding: '12px 0', borderBottom: '1px solid #2c261e' }}>
             <div className="row">
               <div style={{ flex: '2 1 200px' }}>
                 <TextField
@@ -950,7 +990,7 @@ function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry
                       <button
                         className="small"
                         title="Announce this Fell Ability to Discord"
-                        onClick={() => announceFellAbility(fa)}
+                        onClick={() => announceFellAbility(adv.name, fa)}
                       >
                         💬
                       </button>
@@ -979,9 +1019,5 @@ function AdversariesPanel({ entries, editLocal, saveEntry, addEntry, removeEntry
               Save Notes
             </button>
           </div>
-        );
-      })}
-      {entries.length === 0 ? <p className="small muted">No adversaries catalogued yet.</p> : null}
-    </div>
   );
 }

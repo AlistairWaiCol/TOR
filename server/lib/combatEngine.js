@@ -5,7 +5,7 @@
  * server/routes/combat.js is a thin router over it.
  */
 
-import { STANCES } from '../../shared/character.js';
+import { STANCES, totalProtection } from '../../shared/character.js';
 import {
   canEnterRearward,
   isPiercingBlow,
@@ -61,6 +61,7 @@ export async function startCombat() {
     engagements: {},
     actedPlayers: [],
     pendingModifiers: {},
+    pendingHits: {},
   });
   await broadcastSnapshot();
   return combatSnapshot();
@@ -76,6 +77,7 @@ export async function endCombat() {
     engagements: {},
     actedPlayers: [],
     pendingModifiers: {},
+    pendingHits: {},
   });
   await broadcastSnapshot();
   return combatSnapshot();
@@ -312,7 +314,10 @@ export async function attack({
 /**
  * GM-triggered: a combatant instance attacks a Player-hero. Does NOT apply
  * damage yet — the hit character's controller still gets to choose Knockback
- * (see resolveHit below), which adversaries themselves can never do.
+ * (see resolveHit below), which adversaries themselves can never do. Instead
+ * this parks a `pendingHits` entry for that character, which is how their own
+ * screen (CombatHitPrompt.jsx, gated on their own "Playing As" pick) finds out
+ * — never a popup shown to the GM who triggered the roll.
  */
 export async function adversaryAttack({
   combatantId,
@@ -358,14 +363,23 @@ export async function adversaryAttack({
   await updateCombatantRow(combatantId, { attacksUsedThisRound: combatant.attacksUsedThisRound + 1 });
 
   const piercingBlow = result.success && isPiercingBlow(result.featFace, 10);
-  if (piercingBlow) {
+  const enduranceLoss = Math.max(0, Number(weaponDamage) || 0);
+
+  if (result.success) {
     const combat = await getCombatState();
-    const pendingModifiers = { ...combat.pendingModifiers };
-    pendingModifiers[characterId] = {
-      ...(pendingModifiers[characterId] || {}),
-      pendingProtection: { injury: Number(weaponInjury) || 0, source: combatant.name },
-    };
-    await setCombatState({ pendingModifiers });
+    await setCombatState({
+      pendingHits: {
+        ...combat.pendingHits,
+        [characterId]: {
+          stage: 'hit',
+          enduranceLoss,
+          source: combatant.name,
+          rollId: roll.id,
+          piercingBlow,
+          weaponInjury: Number(weaponInjury) || 0,
+        },
+      },
+    });
   }
 
   await broadcastSnapshot();
@@ -375,9 +389,7 @@ export async function adversaryAttack({
     message,
     discord,
     hopeError,
-    hit: result.success
-      ? { characterId, enduranceLoss: Math.max(0, Number(weaponDamage) || 0), combatantName: combatant.name }
-      : null,
+    hit: result.success ? { characterId, enduranceLoss, combatantName: combatant.name } : null,
     piercingBlow,
     combat: await combatSnapshot(),
   };
@@ -386,11 +398,16 @@ export async function adversaryAttack({
 /**
  * The hit hero's controller's choice, after adversaryAttack(): take the full
  * loss, or spend their next main action on Knockback to halve it (round up).
+ * If the blow was a Piercing Blow, this hands off to the Protection-roll
+ * stage instead of clearing the pending hit outright.
  */
 export async function resolveHit({ characterId, enduranceLoss, knockback }) {
   if (!characterId) fail('characterId is required.');
   const character = await getCharacter(characterId);
   if (!character) fail('Character not found.');
+  const combat = await getCombatState();
+  const pending = combat.pendingHits?.[characterId];
+
   const loss = knockback
     ? Math.ceil((Number(enduranceLoss) || 0) / 2)
     : Math.max(0, Number(enduranceLoss) || 0);
@@ -404,8 +421,61 @@ export async function resolveHit({ characterId, enduranceLoss, knockback }) {
     },
   });
   if (knockback) await markActed(characterId);
+
+  const pendingHits = { ...combat.pendingHits };
+  if (pending?.piercingBlow) {
+    pendingHits[characterId] = { stage: 'protection', weaponInjury: pending.weaponInjury, source: pending.source };
+  } else {
+    delete pendingHits[characterId];
+  }
+  await setCombatState({ pendingHits });
+
   await broadcastSnapshot();
-  return { characterId, appliedLoss: loss, endurance: nextEndurance, combat: await combatSnapshot() };
+  return {
+    characterId,
+    appliedLoss: loss,
+    endurance: nextEndurance,
+    kill: nextEndurance <= 0,
+    combat: await combatSnapshot(),
+  };
+}
+
+/**
+ * The Protection roll a Piercing Blow calls for, fired by the hit player from
+ * inside the same pop-up that told them about it — Success Dice and TN are
+ * computed here from their own sheet and the weapon's Injury rating, exactly
+ * as CombatHitPrompt.jsx pre-fills them.
+ */
+export async function protectionRoll({ characterId, hopeSpent, whisperTo }) {
+  if (!characterId) fail('characterId is required.');
+  const character = await getCharacter(characterId);
+  if (!character) fail('Character not found.');
+  const combat = await getCombatState();
+  const pending = combat.pendingHits?.[characterId];
+  if (!pending || pending.stage !== 'protection') fail('No Protection roll is owed right now.');
+
+  const protection = totalProtection(character.sheet);
+  const { roll, result, message, discord, hopeError } = await performRoll({
+    characterId,
+    skill: 'Protection',
+    kind: 'protection',
+    label: 'Protection',
+    rating: protection.total,
+    targetNumber: pending.weaponInjury,
+    hopeSpent,
+    whisperTo,
+  });
+
+  const pendingHits = { ...combat.pendingHits };
+  if (result.success) {
+    delete pendingHits[characterId];
+  } else {
+    pendingHits[characterId] = { stage: 'wound-severity', featFace: result.featFace, source: pending.source };
+  }
+  await setCombatState({ pendingHits });
+
+  await broadcastSnapshot();
+  return { roll, result, message, discord, hopeError, combat: await combatSnapshot() };
 }
 
 /**
@@ -431,6 +501,12 @@ export async function recordWoundSeverity({ characterId, healingDays, dying }) {
     };
   }
   await replaceCharacterSheet(characterId, nextSheet);
+
+  const combat = await getCombatState();
+  const pendingHits = { ...combat.pendingHits };
+  delete pendingHits[characterId];
+  await setCombatState({ pendingHits });
+
   await broadcastSnapshot();
   return { characterId, conditions: nextSheet.conditions, combat: await combatSnapshot() };
 }
@@ -611,10 +687,14 @@ export async function retreat({
 
 /* --- Discord ----------------------------------------------------------------- */
 
-/** Same plumbing the journey engine uses — see server/lib/discord.js. */
-export async function announceFellAbility({ name, description }) {
+/**
+ * Same plumbing the journey engine uses — see server/lib/discord.js.
+ * "[Adversary] - [Ability] - [Text]", so the channel knows who did it.
+ */
+export async function announceFellAbility({ sourceName, name, description }) {
+  const source = sourceName ? `${boldName(sourceName)} - ` : '';
   const discord = await postToDiscord(
-    formatMessage('💀', `${boldName(name || 'Fell Ability')}${description ? ` — ${description}` : ''}`),
+    formatMessage('💀', `${source}${boldName(name || 'Fell Ability')}${description ? ` - ${description}` : ''}`),
   );
   return { ok: true, discord };
 }

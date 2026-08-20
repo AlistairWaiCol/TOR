@@ -5,11 +5,13 @@ import { describe, it } from 'node:test';
 import { GANDALF, EYE } from '../shared/dice.js';
 import {
   STANCE_ORDER,
+  adversarySpecialDamageOptions,
   canEnterRearward,
   engagementCounts,
   engagementLimits,
   isPiercingBlow,
   nextRoundState,
+  pcSpecialDamageOptions,
   promptedCombatActionFor,
   resetCombatantForRound,
 } from '../shared/combat.js';
@@ -85,6 +87,64 @@ describe('round bookkeeping', () => {
       weary: false,
       currentEndurance: 5,
     });
+  });
+});
+
+describe('pcSpecialDamageOptions', () => {
+  it('offers Heavy Blow and Fend Off for a plain close-combat weapon', () => {
+    assert.deepEqual(pcSpecialDamageOptions({ proficiency: 'Swords', name: 'Sword' }, false), [
+      'Heavy Blow',
+      'Fend Off',
+      'Pierce',
+    ]);
+  });
+
+  it('excludes Fend Off for a Bow, but still offers Pierce', () => {
+    assert.deepEqual(pcSpecialDamageOptions({ proficiency: 'Bows', name: 'Bow' }, false), [
+      'Heavy Blow',
+      'Pierce',
+    ]);
+  });
+
+  it('excludes Pierce for Axes and Brawling weapons other than the Dagger', () => {
+    assert.deepEqual(pcSpecialDamageOptions({ proficiency: 'Axes', name: 'Axe' }, false), [
+      'Heavy Blow',
+      'Fend Off',
+    ]);
+    assert.deepEqual(pcSpecialDamageOptions({ proficiency: 'Brawling', name: 'Cudgel' }, false), [
+      'Heavy Blow',
+      'Fend Off',
+    ]);
+  });
+
+  it('offers Pierce for the Dagger specifically, despite being Brawling', () => {
+    assert.deepEqual(pcSpecialDamageOptions({ proficiency: 'Brawling', name: 'Dagger' }, false), [
+      'Heavy Blow',
+      'Fend Off',
+      'Pierce',
+    ]);
+  });
+
+  it('only offers Shield Thrust with a shield equipped', () => {
+    const withShield = pcSpecialDamageOptions({ proficiency: 'Swords', name: 'Sword' }, true);
+    assert.ok(withShield.includes('Shield Thrust'));
+    const without = pcSpecialDamageOptions({ proficiency: 'Swords', name: 'Sword' }, false);
+    assert.ok(!without.includes('Shield Thrust'));
+  });
+});
+
+describe('adversarySpecialDamageOptions', () => {
+  it('always includes Heavy Blow', () => {
+    assert.deepEqual(adversarySpecialDamageOptions({ special: '' }), ['Heavy Blow']);
+    assert.deepEqual(adversarySpecialDamageOptions(undefined), ['Heavy Blow']);
+  });
+
+  it('adds the creature-specific special tags, comma-split and trimmed', () => {
+    assert.deepEqual(adversarySpecialDamageOptions({ special: 'Break Shield, Seize' }), [
+      'Heavy Blow',
+      'Break Shield',
+      'Seize',
+    ]);
   });
 });
 

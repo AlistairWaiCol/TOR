@@ -524,6 +524,75 @@ td select {
   color: #dd9781;
 }
 
+/* Escalating visual treatment for a combat roll's result: plain success stays
+   the default `.result-line` styling above; a Piercing Blow and a kill each
+   step up in how much the outcome demands attention. */
+.outcome-banner {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.roll-outcome.tier-piercing {
+  border: 1px solid var(--gold);
+  background: rgba(200, 162, 74, 0.1);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.roll-outcome.tier-piercing .outcome-banner {
+  color: var(--gold);
+}
+.roll-outcome.tier-kill {
+  border: 2px solid var(--red);
+  background: rgba(180, 85, 63, 0.16);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  box-shadow: 0 0 20px rgba(180, 85, 63, 0.3);
+}
+.roll-outcome.tier-kill .outcome-banner {
+  color: #ff9a80;
+  font-size: 0.85rem;
+}
+.roll-outcome.tier-kill .result-line {
+  font-size: 1.25rem;
+}
+
+/* Collapsible Adversary Bank category groups. */
+.category-group {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.category-group summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  color: var(--gold);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.category-group summary::-webkit-details-marker {
+  display: none;
+}
+.category-group summary::before {
+  content: '▸';
+  color: var(--ink-dim);
+  transition: transform 0.1s ease;
+}
+.category-group[open] summary::before {
+  transform: rotate(90deg);
+}
+.category-group .category-body {
+  padding: 10px 12px;
+}
+
 .roll-feed {
   max-height: 340px
 ;
@@ -734,6 +803,23 @@ td select {
 .turn-prompt h3 {
   color: var(--gold);
   margin: 0 0 4px;
+}
+
+/* A save confirmation that overlays instead of reflowing the page. */
+.toast {
+  position: fixed;
+  left: 50%;
+  top: 18px;
+  transform: translateX(-50%);
+  z-index: 45;
+  background: #1e2a20;
+  border: 1px solid #3d5940;
+  color: #b6d3b8;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
 }
 
 .sticky-bar {

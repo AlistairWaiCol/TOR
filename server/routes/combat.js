@@ -104,6 +104,15 @@ router.post(
   }),
 );
 
+/** The hit player rolls PROTECTION themselves, from inside the same pop-up. */
+router.post(
+  '/protection-roll',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await engine.protectionRoll(req.body ?? {}));
+  }),
+);
+
 router.post(
   '/wound-severity',
   requireGM,

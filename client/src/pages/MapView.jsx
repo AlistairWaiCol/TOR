@@ -10,7 +10,7 @@ import {
   terrainDiceModifier,
   validateRoleAssignments,
 } from '@shared/journey.js';
-import { hexKey } from '@shared/hexMath.js';
+import { hexKey, removeHexFromRoute } from '@shared/hexMath.js';
 import { api } from '../lib/api.js';
 import { saveJourneyMap } from '../lib/journeyMap.js';
 import { getSocket } from '../lib/socket.js';
@@ -164,7 +164,15 @@ export default function MapView() {
       setRoute(route.slice(0, -1)); // click the tip again to undo
       return;
     }
-    if (route.some((h) => h.col === hx.col && h.row === hx.row)) return;
+    // A freehand line only barely clipping a hex's corner still snaps it in —
+    // expected behaviour of point-to-nearest-centre snapping, not a bug. This
+    // is the correction: clicking a hex already in the route removes it, and
+    // the remaining path is re-bridged (removeHexFromRoute in shared/hexMath.js)
+    // so it stays walkable one hex at a time.
+    if (route.some((h) => h.col === hx.col && h.row === hx.row)) {
+      setRoute(removeHexFromRoute(route, hx));
+      return;
+    }
     setRoute([...route, hx]);
   };
 
