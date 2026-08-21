@@ -25,24 +25,24 @@ export default function Login() {
       <form className="login-card" onSubmit={submit}>
         <h1>One Ring Companion</h1>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Darkening of Mirkwood · shared passcode
+          Darkening of Mirkwood · shared password
         </p>
         {error ? <div className="error-box">{error}</div> : null}
         <label className="field">
-          <span>Passcode</span>
+          <span>Password</span>
           <input
             type="password"
             value={passcode}
             autoFocus
             onChange={(e) => setPasscode(e.target.value)}
-            placeholder="player or GM passcode"
+            placeholder="player or GM password"
           />
         </label>
         <button className="primary" type="submit" disabled={busy || !passcode}>
           {busy ? 'Checking…' : 'Enter'}
         </button>
         <p className="small muted" style={{ marginBottom: 0 }}>
-          The player passcode gives full read/write on everything. The GM passcode adds the roll
+          The player password gives full read/write on everything. The GM password adds the roll
           trigger, map calibration and Year/Season editing.
         </p>
       </form>

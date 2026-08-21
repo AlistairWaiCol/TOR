@@ -127,7 +127,7 @@ function RequireGM({ children }) {
     return (
       <div className="panel">
         <h2>GM only</h2>
-        <p className="muted">This screen needs the GM passcode.</p>
+        <p className="muted">This screen needs the GM password.</p>
       </div>
     );
   }

@@ -630,7 +630,7 @@ export default function MapView() {
                       Roll {pending?.skill?.toUpperCase()} for {targetCharacter?.name ?? 'target'}
                     </button>
                     <p className="small muted">
-                      The targeted player presses this themselves — the player passcode is enough.
+                      The targeted player presses this themselves — the player password is enough.
                     </p>
                   </>
                 ) : null}
